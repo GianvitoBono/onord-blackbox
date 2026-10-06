@@ -1,10 +1,10 @@
 import { useEffect, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
-import { updateMetricDefinition, type GpsSample, type MetricDefinition, type MetricSample, type Trip, type TripEvent } from '../api'
+import { updateMetricDefinition, type GpsSample, type MetricDefinition, type MetricSample, type TripEvent } from '../api'
 import TripMap from '../components/TripMap'
 import TelemetryChart from '../components/TelemetryChart'
-import { formatDate, formatDistance, metricLabel, nearestGps, tripReason, type NearbyReading } from './format'
+import { formatDate, formatDistance, metricLabel, nearestGps, type NearbyReading } from './format'
 
-type Props = { trips: Trip[]; tripId: string; setTripId: Dispatch<SetStateAction<string>>; selectedTrip?: Trip; detailError: string; detailLoading: boolean; onRefresh: () => void; gps: GpsSample[]; events: TripEvent[]; displayPoint: GpsSample | null; setHoverPoint: Dispatch<SetStateAction<GpsSample | null>>; setSelectedPoint: Dispatch<SetStateAction<GpsSample | null>>; displayStopEvent: TripEvent | null; setHoverStopEvent: Dispatch<SetStateAction<TripEvent | null>>; setSelectedStopEvent: Dispatch<SetStateAction<TripEvent | null>>; nearby: NearbyReading[]; nearbyLoading: boolean; catalog: MetricDefinition[]; metricName: string; setMetricName: Dispatch<SetStateAction<string>>; metrics: MetricSample[]; selectedMetric?: MetricDefinition }
+type Props = { tripId: string; detailError: string; onRefresh: () => void; gps: GpsSample[]; events: TripEvent[]; displayPoint: GpsSample | null; setHoverPoint: Dispatch<SetStateAction<GpsSample | null>>; setSelectedPoint: Dispatch<SetStateAction<GpsSample | null>>; displayStopEvent: TripEvent | null; setHoverStopEvent: Dispatch<SetStateAction<TripEvent | null>>; setSelectedStopEvent: Dispatch<SetStateAction<TripEvent | null>>; nearby: NearbyReading[]; nearbyLoading: boolean; catalog: MetricDefinition[]; metricName: string; setMetricName: Dispatch<SetStateAction<string>>; metrics: MetricSample[]; selectedMetric?: MetricDefinition }
 
 function stopDuration(events: TripEvent[], event: TripEvent): string {
   const match = events.find((candidate) => candidate.stopId === event.stopId && candidate.kind !== event.kind)
@@ -15,7 +15,7 @@ function stopDuration(events: TripEvent[], event: TripEvent): string {
   return hours ? `${hours} h ${minutes} min` : `${minutes} min`
 }
 
-export default function Explore({ trips, tripId, setTripId, selectedTrip, detailError, detailLoading, onRefresh, gps, events, displayPoint, setHoverPoint, setSelectedPoint, displayStopEvent, setHoverStopEvent, setSelectedStopEvent, nearby, nearbyLoading, catalog, metricName, setMetricName, metrics, selectedMetric }: Props) {
+export default function Explore({ tripId, detailError, onRefresh, gps, events, displayPoint, setHoverPoint, setSelectedPoint, displayStopEvent, setHoverStopEvent, setSelectedStopEvent, nearby, nearbyLoading, catalog, metricName, setMetricName, metrics, selectedMetric }: Props) {
   const [inspectorOpen, setInspectorOpen] = useState(false)
   useEffect(() => { setInspectorOpen(false) }, [tripId])
   useEffect(() => {
@@ -54,35 +54,11 @@ export default function Explore({ trips, tripId, setTripId, selectedTrip, detail
   }
   return (
     <>
-<div className="page-heading explore-heading">
-<div>
-<span className="eyebrow">ANALISI PERCORSO</span>
-<h1>Esplora</h1>
-<p>Traccia del viaggio. Clicca la linea per aprire misure e segnali.</p>
-</div>
-<div className="explore-controls"><button className="outline-button" type="button" onClick={onRefresh} disabled={detailLoading}>{detailLoading ? 'Aggiornamento…' : '↻ Aggiorna dati'}</button><select className="trip-selector" aria-label="Seleziona viaggio" value={tripId} onChange={e => setTripId(e.target.value)}>
-{trips.length === 0 && <option value="">Nessun viaggio</option>}{trips.map(t => <option key={t.id} value={t.id}>
-{formatDate(t.startedAt)} · {formatDistance(t.distanceGpsM ?? t.distanceObdM)}
-</option>)}
-</select></div>
-</div>
 {detailError && <div className="banner error">
 {detailError}
 </div>}
 <div className="explore-layout">
 <div className="map-column">
-<div className="map-heading">
-<div>
-<span className="eyebrow">TRACCIA GPS</span>
-<h2>
-{selectedTrip ? formatDate(selectedTrip.startedAt) : 'Seleziona un viaggio'}
-</h2>
-{selectedTrip && <p>Fine: {selectedTrip.endedAt ? formatDate(selectedTrip.endedAt) : 'in corso'} · Avvio: {tripReason(selectedTrip.startReason)} · Chiusura: {tripReason(selectedTrip.endReason)}</p>}
-</div>
-<span>
-{`${gps.length} punti`}
-</span>
-</div>
 <div className="large-map">
 <TripMap samples={gps} events={events} selectedSampleId={displayPoint?.sampleId} onPointHover={setHoverPoint} onPointSelect={selectPoint} onEventHover={setHoverStopEvent} onEventSelect={selectStop} />
 </div>

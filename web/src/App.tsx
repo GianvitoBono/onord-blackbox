@@ -6,7 +6,7 @@ import Explore from './pages/Explore'
 import Fleet from './pages/Fleet'
 import Admin from './pages/Admin'
 import Settings from './pages/Settings'
-import { message, pages, pageFromHash, labels, glyphs, type Page, type NearbyReading } from './pages/format'
+import { formatDate, formatDistance, message, pages, pageFromHash, labels, glyphs, type Page, type NearbyReading } from './pages/format'
 
 export default function App() {
   const [page, setPage] = useState<Page>(pageFromHash)
@@ -180,12 +180,18 @@ export default function App() {
 <span className="live-dot" /> TELEMETRIA PRIVATA</div>
 </aside>
     <main className="main-area">
-<header className="topbar">
+<header className={`topbar${page === 'explore' && signedIn ? ' topbar--explore' : ''}`}>
 <button className="menu-toggle" onClick={() => setMobileMenu(v => !v)} aria-label="Apri menu">☰</button>
 <span className="breadcrumb">Workspace <span>/</span> <strong>
-{labels[page]}
+{labels[page]}{page === 'explore' && selectedTrip ? ` · ${formatDate(selectedTrip.startedAt)}` : ''}
 </strong>
 </span>
+{page === 'explore' && signedIn && <div className="topbar-trip-controls">
+<button className="outline-button" type="button" onClick={() => setRefreshTick(value => value + 1)} disabled={detailLoading} aria-label="Aggiorna dati viaggio">{detailLoading ? 'Aggiornamento…' : '↻ Aggiorna'}</button>
+<select className="trip-selector" aria-label="Seleziona viaggio" value={tripId} onChange={event => setTripId(event.target.value)}>
+{trips.length === 0 && <option value="">Nessun viaggio</option>}{trips.map(trip => <option key={trip.id} value={trip.id}>{formatDate(trip.startedAt)} · {formatDistance(trip.distanceGpsM ?? trip.distanceObdM)}</option>)}
+</select>
+</div>}
 <div className="topbar-actions">
 {signedIn && vehicles.length > 0 && <select className="global-vehicle" aria-label="Mezzo selezionato" value={selectedId} onChange={e => selectVehicle(e.target.value)}>
 {vehicles.map(v => <option key={v.id} value={v.id}>
@@ -225,7 +231,7 @@ export default function App() {
 </div>}
         {page === 'overview' && <Overview selectedVehicle={selectedVehicle} trips={trips} totalDistance={totalDistance} detailLoading={detailLoading} deviceFresh={deviceFresh} updatedAt={updatedAt} loading={loading} loadFleet={refreshAll} openTrip={openTrip} />}
         {page === 'journeys' && <Journeys selectedVehicle={selectedVehicle} trips={trips} detailLoading={detailLoading} openTrip={openTrip} />}
-        {page === 'explore' && <Explore trips={trips} tripId={tripId} setTripId={setTripId} selectedTrip={selectedTrip} detailError={detailError} detailLoading={detailLoading} onRefresh={() => setRefreshTick(value => value + 1)} gps={gps} events={tripEvents} displayPoint={displayPoint} setHoverPoint={setHoverPoint} setSelectedPoint={setSelectedPoint} displayStopEvent={displayStopEvent} setHoverStopEvent={setHoverStopEvent} setSelectedStopEvent={setSelectedStopEvent} nearby={nearby} nearbyLoading={nearbyLoading} catalog={catalog} metricName={metricName} setMetricName={setMetricName} metrics={metrics} selectedMetric={selectedMetric} />}
+        {page === 'explore' && <Explore tripId={tripId} detailError={detailError} onRefresh={() => setRefreshTick(value => value + 1)} gps={gps} events={tripEvents} displayPoint={displayPoint} setHoverPoint={setHoverPoint} setSelectedPoint={setSelectedPoint} displayStopEvent={displayStopEvent} setHoverStopEvent={setHoverStopEvent} setSelectedStopEvent={setSelectedStopEvent} nearby={nearby} nearbyLoading={nearbyLoading} catalog={catalog} metricName={metricName} setMetricName={setMetricName} metrics={metrics} selectedMetric={selectedMetric} />}
         {page === 'fleet' && <Fleet vehicles={vehicles} devices={devices} selectedId={selectedId} selectedVehicle={selectedVehicle} selectedDevice={selectedDevice} deviceFresh={deviceFresh} vehicleStatus={vehicleStatus} statusError={statusError} ecuIdentity={ecuIdentity} ecuIdentityError={ecuIdentityError} vehicleMessage={vehicleMessage} vehicleEditing={vehicleEditing} vehicleForm={vehicleForm} setVehicleForm={setVehicleForm} vehicleBusy={vehicleBusy} saveVehicle={saveVehicle} editVehicle={editVehicle} setVehicleEditing={setVehicleEditing} selectVehicle={selectVehicle} openTrip={openTrip} now={now} />}
         {page === 'admin' && <Admin vehicles={vehicles} devices={devices} pending={pending} adminMessage={adminMessage} adminVehicle={adminVehicle} setAdminVehicle={setAdminVehicle} adminName={adminName} setAdminName={setAdminName} adminPassword={adminPassword} setAdminPassword={setAdminPassword} adminBusy={adminBusy} tokenMode={tokenMode} setTokenMode={setTokenMode} customToken={customToken} setCustomToken={setCustomToken} issuedToken={issuedToken} approve={approve} rotate={rotate} loadFleet={loadFleet} />}
         {page === 'settings' && <Settings theme={theme} setTheme={setTheme} signedIn={signedIn} updatedAt={updatedAt} />}
