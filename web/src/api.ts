@@ -57,6 +57,13 @@ export type TripEvent = {
 }
 
 export type MetricDefinition = { name: string; unit: string; description?: string | null }
+
+export async function updateMetricDefinition(name: string, displayName: string, unit: string): Promise<MetricDefinition> {
+  return request<MetricDefinition>(`/api/v1/metrics/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ displayName, unit }),
+  })
+}
 export type MetricSample = { sampleId: string; observedAt: string; name: string; unit: string; value: number }
 export type VehicleStatus = { tripId: string | null; gps: GpsSample | null; metrics: MetricSample[] }
 

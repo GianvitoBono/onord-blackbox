@@ -580,6 +580,46 @@ a {
 .chart-section .section-head {
   margin:22px 0
 }
+.metric-actions {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap
+}
+.metric-identity,.metric-message {
+  color:var(--muted);
+  font-size:12px;
+  margin:0 0 14px
+}
+.metric-identity code {
+  color:var(--ink);
+  overflow-wrap:anywhere
+}
+.metric-editor {
+  display:flex;
+  align-items:end;
+  flex-wrap:wrap;
+  gap:10px;
+  padding:15px;
+  margin-bottom:16px;
+  border:1px solid var(--line);
+  border-radius:7px
+}
+.metric-editor label {
+  display:grid;
+  gap:6px;
+  min-width:160px;
+  flex:1;
+  color:var(--muted);
+  font-size:12px
+}
+.metric-editor input {
+  border:1px solid var(--line);
+  border-radius:5px;
+  background:white;
+  color:var(--ink);
+  padding:10px
+}
 .fleet-list {
   background:white;
   border:1px solid var(--line);
@@ -1028,6 +1068,9 @@ a {
 .metric-selector {
     width:100%
   }
+.metric-actions {
+    width:100%
+  }
 
 }
 
@@ -1123,6 +1166,9 @@ a {
 [data-theme='dark'] .stop-inspector {
   background:#252f2b;
   border-color:#4d5345
+}
+[data-theme='dark'] .metric-editor input {
+  background:#1e2b24;
 }
 [data-theme='dark'] .stop-inspector .inspector-data div { border-color:#3c4841 }
 [data-theme='dark'] .fleet-telemetry {

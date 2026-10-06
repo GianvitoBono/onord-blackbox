@@ -228,7 +228,7 @@ class BlackBoxService : LifecycleService() {
                 val level = battery.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).takeIf { it >= 0 }
                 val temperature = (registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1).takeIf { it >= 0 }?.div(10f)
                 db.samples().insert(TelemetrySampleEntity(UUID.randomUUID().toString(), forTripId, System.currentTimeMillis(), powerConnected = connected, batteryLevel = level, batteryTemperatureC = temperature))
-                delay(1_000)
+                delay(2_000)
             }
         }
     }
@@ -236,6 +236,7 @@ class BlackBoxService : LifecycleService() {
     private suspend fun stopActiveCollection() {
         sampler?.cancelAndJoin(); sampler = null
         obdJob?.cancelAndJoin(); obdJob = null
+        getSharedPreferences("diagnostics", MODE_PRIVATE).edit().putString("obd_status", "in attesa di un viaggio attivo").apply()
         wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null
     }
 
@@ -260,12 +261,20 @@ class BlackBoxService : LifecycleService() {
                         obdMafGps = v[ObdPid.MAF], obdFuelLevelPct = v[ObdPid.FUEL_LEVEL], obdVoltageV = v[ObdPid.CONTROL_MODULE_VOLTAGE],
                         obdValuesJson = org.json.JSONObject().apply {
                             v.forEach { (pid, value) -> put("%02X".format(pid.code), value) }
+                            reading.rawValues.forEach { (code, value) -> put("raw.%02X".format(code), value) }
                             reading.derived.forEach { (name, value) -> put(name, value) }
                         }.toString()
                     ))
-                }, onStatus = { status -> getSharedPreferences("diagnostics", MODE_PRIVATE).edit().putString("obd_status", status).apply() }).run()
+                    getSharedPreferences("diagnostics", MODE_PRIVATE).edit()
+                        .putLong("last_obd", reading.observedAt)
+                        .putInt("obd_last_values", v.size + reading.rawValues.size + reading.derived.size).apply()
+                }, onStatus = { status -> getSharedPreferences("diagnostics", MODE_PRIVATE).edit().putString("obd_status", status).apply() },
+                    onDiscovery = { supported, known, raw -> getSharedPreferences("diagnostics", MODE_PRIVATE).edit()
+                        .putInt("obd_supported", supported).putInt("obd_known", known).putInt("obd_raw", raw).apply() }).run()
             } catch (e: SecurityException) {
                 getSharedPreferences("diagnostics", MODE_PRIVATE).edit().putString("obd_status", "Bluetooth permission missing").apply()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 getSharedPreferences("diagnostics", MODE_PRIVATE).edit().putString("obd_status", e.message ?: "adapter error").apply()
             }

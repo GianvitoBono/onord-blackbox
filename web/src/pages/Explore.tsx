@@ -1,5 +1,5 @@
-import type { Dispatch, SetStateAction } from 'react'
-import type { GpsSample, MetricDefinition, MetricSample, Trip, TripEvent } from '../api'
+import { useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
+import { updateMetricDefinition, type GpsSample, type MetricDefinition, type MetricSample, type Trip, type TripEvent } from '../api'
 import TripMap from '../components/TripMap'
 import TelemetryChart from '../components/TelemetryChart'
 import { formatDate, formatDistance, metricLabel, nearestGps, tripReason, type NearbyReading } from './format'
@@ -16,6 +16,32 @@ function stopDuration(events: TripEvent[], event: TripEvent): string {
 }
 
 export default function Explore({ trips, tripId, setTripId, selectedTrip, detailError, detailLoading, onRefresh, gps, events, displayPoint, setHoverPoint, setSelectedPoint, displayStopEvent, setHoverStopEvent, setSelectedStopEvent, nearby, nearbyLoading, catalog, metricName, setMetricName, metrics, selectedMetric }: Props) {
+  const [editingMetric, setEditingMetric] = useState(false)
+  const [displayName, setDisplayName] = useState('')
+  const [unit, setUnit] = useState('')
+  const [metricBusy, setMetricBusy] = useState(false)
+  const [metricMessage, setMetricMessage] = useState('')
+  function openMetricEditor() {
+    if (!selectedMetric) return
+    setDisplayName(selectedMetric.description || selectedMetric.name)
+    setUnit(selectedMetric.unit)
+    setMetricMessage('')
+    setEditingMetric(true)
+  }
+  async function saveMetric(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!selectedMetric) return
+    setMetricBusy(true)
+    setMetricMessage('')
+    try {
+      await updateMetricDefinition(selectedMetric.name, displayName.trim(), unit.trim())
+      setEditingMetric(false)
+      setMetricMessage('Nome e unità salvati per tutti i viaggi.')
+      onRefresh()
+    } catch (error) {
+      setMetricMessage(error instanceof Error ? error.message : 'Salvataggio non riuscito.')
+    } finally { setMetricBusy(false) }
+  }
   return (
     <>
 <div className="page-heading explore-heading">
@@ -103,10 +129,10 @@ export default function Explore({ trips, tripId, setTripId, selectedTrip, detail
 {nearbyLoading ? <p className="inspector-muted">Caricamento segnali…</p> : nearby.length ? <div className="nearby-list">
 {nearby.map((item, index) => <div key={`${item.name}-${index}`}>
 <span>
-{item.name.replaceAll('.', ' · ')}
+{catalog.find(metric => metric.name === item.name)?.description || item.name.replaceAll('.', ' · ')}
 </span>
 <strong>
-{item.value.toLocaleString('it-IT', { maximumFractionDigits: 2 })} {item.unit}
+{item.value.toLocaleString('it-IT', { maximumFractionDigits: 2 })} {catalog.find(metric => metric.name === item.name)?.unit ?? item.unit}
 </strong>
 </div>)}
 </div> : <p className="inspector-muted">Nessun segnale vicino al punto.</p>}
@@ -122,11 +148,19 @@ export default function Explore({ trips, tripId, setTripId, selectedTrip, detail
 <span className="eyebrow">SERIE TEMPORALE</span>
 <h2>Segnali del mezzo</h2>
 </div>
-<select className="metric-selector" value={metricName} onChange={e => setMetricName(e.target.value)} aria-label="Seleziona segnale">
+<div className="metric-actions"><select className="metric-selector" value={metricName} onChange={e => { setMetricName(e.target.value); setEditingMetric(false); setMetricMessage('') }} aria-label="Seleziona segnale">
 {catalog.length === 0 && <option value="">Nessun segnale</option>}{catalog.map(m => <option key={m.name} value={m.name}>
 {metricLabel(m)} ({m.unit || '—'})</option>)}
-</select>
+</select><button className="outline-button" type="button" onClick={openMetricEditor} disabled={!selectedMetric}>Nome e unità</button></div>
 </div>
+{selectedMetric && <p className="metric-identity">ID segnale: <code>{selectedMetric.name}</code>. Nome e unità modificano la visualizzazione; per PID raw il valore resta grezzo.</p>}
+{editingMetric && selectedMetric && <form className="metric-editor" onSubmit={saveMetric}>
+<label>Nome leggibile<input value={displayName} onChange={event => setDisplayName(event.target.value)} maxLength={128} required /></label>
+<label>Unità<input value={unit} onChange={event => setUnit(event.target.value)} maxLength={32} placeholder="es. kPa, °C; vuoto se sconosciuta" /></label>
+<button className="primary-button" type="submit" disabled={metricBusy}>{metricBusy ? 'Salvataggio…' : 'Salva metrica'}</button>
+<button className="outline-button" type="button" onClick={() => setEditingMetric(false)}>Annulla</button>
+</form>}
+{metricMessage && <p className="metric-message" role="status">{metricMessage}</p>}
 {catalog.length ? <TelemetryChart samples={metrics} unit={selectedMetric?.unit || ''} selectedAt={displayPoint?.observedAt} onHoverAt={at => setHoverPoint(at ? nearestGps(gps, at) : null)} onSelectAt={at => { const point = nearestGps(gps, at); if (point) setSelectedPoint(point) }} /> : <div className="empty-message">Nessun segnale per questo viaggio.</div>}
 </section>
 </>

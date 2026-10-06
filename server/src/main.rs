@@ -792,8 +792,10 @@ async fn insert_metric_sample(
             INSERT INTO metric_definitions(name, source, unit, description)
             VALUES ($1, split_part($1, '.', 1), $8, $9)
             ON CONFLICT(name) DO UPDATE SET
-                unit=CASE WHEN metric_definitions.unit='' THEN EXCLUDED.unit ELSE metric_definitions.unit END,
-                description=COALESCE(metric_definitions.description, EXCLUDED.description)
+                unit=CASE WHEN metric_definitions.manually_defined THEN metric_definitions.unit
+                          WHEN metric_definitions.unit='' THEN EXCLUDED.unit ELSE metric_definitions.unit END,
+                description=CASE WHEN metric_definitions.manually_defined THEN metric_definitions.description
+                                 ELSE COALESCE(metric_definitions.description, EXCLUDED.description) END
             RETURNING id
          ), series AS (
             INSERT INTO metric_series(metric_id, device_id, vehicle_id, trip_id, labels)
@@ -1822,6 +1824,66 @@ struct MetricCatalogEntry {
     description: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UpdateMetricDefinition {
+    display_name: String,
+    unit: String,
+}
+
+async fn update_metric_definition(
+    State(s): State<App>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Json(body): Json<UpdateMetricDefinition>,
+) -> Result<Json<MetricCatalogEntry>> {
+    dashboard(&s.db, &headers).await?;
+    let name = name.trim();
+    let unit = body.unit.trim();
+    let display_name = body.display_name.trim();
+    if name.is_empty()
+        || name.len() > 96
+        || unit.len() > 32
+        || display_name.is_empty()
+        || display_name.len() > 128
+    {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "invalid_metric_definition",
+            "name, unit, or description exceeds allowed length",
+        ));
+    }
+    if unit.chars().any(char::is_control) || display_name.chars().any(char::is_control) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "invalid_metric_definition",
+            "unit and description must not contain control characters",
+        ));
+    }
+    let row = sqlx::query(
+        "UPDATE metric_definitions SET unit=$2, description=$3, manually_defined=true
+         WHERE name=$1 RETURNING name,unit,description",
+    )
+    .bind(name)
+    .bind(unit)
+    .bind(display_name)
+    .fetch_optional(&s.db)
+    .await
+    .map_err(db_err)?
+    .ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "metric_not_found",
+            "metric definition not found",
+        )
+    })?;
+    Ok(Json(MetricCatalogEntry {
+        name: row.try_get("name").map_err(db_err)?,
+        unit: row.try_get("unit").map_err(db_err)?,
+        description: row.try_get("description").map_err(db_err)?,
+    }))
+}
+
 async fn metric_catalog(
     State(s): State<App>,
     headers: HeaderMap,
@@ -1995,6 +2057,10 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/trips/:trip_id/metrics", get(metrics))
         .route("/api/v1/trips/:trip_id/telemetry-at", get(telemetry_at))
         .route("/api/v1/trips/:trip_id/metric-catalog", get(metric_catalog))
+        .route(
+            "/api/v1/metrics/:name",
+            axum::routing::patch(update_metric_definition),
+        )
         .route("/api/v1/geo/correlations", get(geo_correlations))
         .with_state(App { db, cookie_secure })
         .layer(middleware::from_fn(log_request))

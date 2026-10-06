@@ -136,10 +136,14 @@ class MainActivity : ComponentActivity() {
         val syncStatus = diagnostics.getString("sync_status", "mai sincronizzato") ?: "mai sincronizzato"
         val lastAttempt = diagnostics.getLong("last_sync_attempt", 0L)
         val lastSuccess = diagnostics.getLong("last_sync_success", 0L)
+        val lastObd = diagnostics.getLong("last_obd", 0L)
+        val obdSupported = diagnostics.getInt("obd_supported", -1)
         info.text = "Permesso posizione: ${if (hasBackgroundLocation()) "sempre" else "mancante"}\n" +
             "Viaggi salvati: $tripCount\nCampioni locali: $sampleCount\nIn attesa di sincronizzazione: $pendingCount\n\n" +
             "GPS: $gpsStatus${if (lastGps > 0) " · ultimo punto ${DateFormat.format("dd/MM HH:mm:ss", lastGps)}" else ""}\n" +
             "OBD: ${diagnostics.getString("obd_status", "non connesso") ?: "non connesso"}\n" +
+            (if (obdSupported >= 0) "PID OBD dichiarati: $obdSupported · decodificati: ${diagnostics.getInt("obd_known", 0)} · raw: ${diagnostics.getInt("obd_raw", 0)}\n" else "") +
+            (if (lastObd > 0) "Ultimi valori OBD: ${diagnostics.getInt("obd_last_values", 0)} · ${DateFormat.format("dd/MM HH:mm:ss", lastObd)}\n" else "") +
             "Sincronizzazione: $syncStatus\n" +
             "Ultimo tentativo: ${if (lastAttempt > 0) DateFormat.format("dd/MM HH:mm", lastAttempt) else "mai"}\n" +
             "Ultimo successo: ${if (lastSuccess > 0) DateFormat.format("dd/MM HH:mm", lastSuccess) else "mai"}\n\n" +

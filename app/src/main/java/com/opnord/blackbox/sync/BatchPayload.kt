@@ -51,11 +51,13 @@ internal object BatchPayload {
                 "10" to sample.obdMafGps, "2F" to sample.obdFuelLevelPct, "42" to sample.obdVoltageV)
                 .forEach { (pid, value) -> if (value != null) values.put(pid, value) }
             values.keys().asSequence().toList().sorted().forEach { shortPid ->
-                val pid = if (shortPid.startsWith("calc.")) shortPid else "01$shortPid"
+                val isRaw = shortPid.startsWith("raw.")
+                val code = if (isRaw) shortPid.removePrefix("raw.") else shortPid
+                val pid = if (shortPid.startsWith("calc.")) shortPid else "01$code"
                 val value = values.optDouble(shortPid, Double.NaN)
                 if (value.isFinite()) {
                     val id = java.util.UUID.nameUUIDFromBytes("${sample.id}:$pid".toByteArray(Charsets.UTF_8)).toString()
-                    val definition = shortPid.toIntOrNull(16)?.let(ObdPid::fromCode)
+                    val definition = if (isRaw) null else shortPid.toIntOrNull(16)?.let(ObdPid::fromCode)
                     val derivedName = when (shortPid) {
                         "calc.manifold_gauge_pressure_kpa" -> "Estimated manifold gauge pressure (MAP − barometric)"
                         "calc.engine_torque_nm" -> "Estimated engine torque (actual % × reference Nm)"
@@ -66,8 +68,11 @@ internal object BatchPayload {
                         "calc.engine_torque_nm" -> "Nm"
                         else -> null
                     }
+                    val rawName = if (isRaw) "Mode 01 PID $code raw unsigned integer" else null
+                    val rawUnit = if (isRaw) "raw_unsigned_integer" else null
                     obd.put(JSONObject().put("sampleId", id).put("observedAt", timestamp(sample.timestamp)).put("pid", pid).put("value", value)
-                        .put("name", definition?.label ?: derivedName ?: JSONObject.NULL).put("unit", definition?.unit ?: derivedUnit ?: JSONObject.NULL))
+                        .put("name", definition?.label?.replace('_', ' ') ?: derivedName ?: rawName ?: JSONObject.NULL)
+                        .put("unit", definition?.unit ?: derivedUnit ?: rawUnit ?: JSONObject.NULL))
                 }
             }
         }

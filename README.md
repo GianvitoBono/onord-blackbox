@@ -2,7 +2,7 @@
 
 Logger Android offline-first per OnePlus Nord originale AC2003 (Android 12, API 31), API Rust/TimescaleDB e dashboard React/TypeScript. GPS, sync Wi-Fi e lettura OBD-II standard via Bluetooth classico hanno una prima implementazione compilabile. APK debug installato e avviato sul telefono; logging GPS/OBD in auto ancora da verificare.
 
-APK debug aggiornato: [opnord-blackbox-0.1.1-debug.apk](releases/opnord-blackbox-0.1.1-debug.apk) ([SHA-256](releases/opnord-blackbox-0.1.1-debug.apk.sha256)). Aprire il file sul telefono per aggiornare l'app; aggiornare il backend prima di sincronizzare i nuovi eventi sosta e i viaggi legati al vecchio device ID.
+APK debug aggiornato: [opnord-blackbox-0.1.2-debug.apk](releases/opnord-blackbox-0.1.2-debug.apk) ([SHA-256](releases/opnord-blackbox-0.1.2-debug.apk.sha256)). Aprire il file sul telefono per aggiornare l'app; aggiornare il backend prima di usare la modifica manuale delle metriche (migrazione 0008).
 
 - [Taskboard e criteri di completamento](docs/taskboard.md)
 - [Architettura Android](docs/architecture.md)
@@ -36,6 +36,8 @@ Per Cargo e npm usare `scripts/run-external.sh` come prefisso: imposta cache, ta
 API locale usa HTTP solo dietro loopback per sviluppo. App Android accetta endpoint HTTPS: per sincronizzare dal telefono serve un endpoint raggiungibile e TLS valido, oltre a token device provisionato. Logger GPS funziona offline senza backend. Il monitor apre un viaggio dopo movimento GPS confermato, registra inizio/fine sosta dopo due minuti fermo e chiude il viaggio dopo 90 minuti di sosta continua. Oscillazioni alimentazione USB non cambiano il viaggio. La sincronizzazione usa solo Wi-Fi e invia anche campioni di viaggi attivi; alla chiusura invia i metadati finali. Nella schermata Android sono visibili ultimo GPS, campioni ancora da inviare ed esito dell'ultimo sync; "Sincronizza ora" forza un nuovo tentativo. Avviare il monitor dalla schermata app dopo permessi posizione precisi/sempre; dopo force-stop serve riaprirlo manualmente. Aggiornare prima il backend (migrazione 0007), poi l'APK: i nuovi eventi sosta richiedono il backend aggiornato.
 
 L'ID dispositivo è un UUID stabile, diverso dal nome del mezzo. Se viene cambiato, l'app rigenera i batch locali ancora da inviare con il nuovo ID; il backend riassocia automaticamente i viaggi esistenti quando il nuovo dispositivo è assegnato allo stesso mezzo. I campioni già ricevuti conservano l'ID dispositivo originale come provenienza. Aggiornare il backend prima di sincronizzare con un ID cambiato.
+
+GPS e batteria vengono campionati ogni 2 s durante il viaggio. All'avvio della connessione OBD l'app legge i bitmap Mode 01 supportati e ruota tutti i PID dichiarati; quelli con formula nota hanno nome e unità, altri valori numerici semplici restano marcati `raw_unsigned_integer`. La schermata Android mostra quanti PID sono stati dichiarati, decodificati e letti. In **Esplora → Segnali del mezzo → Nome e unità** si possono correggere etichette e unità, preservate dal backend. La sola rinomina non applica formule di conversione ai valori raw. Sensori proprietari Alfa/Fiat richiedono identificazione di PID, richiesta e formula tramite acquisizione reale.
 
 ## OBD-II sulla Giulietta 2020 1.6 JTDm2
 

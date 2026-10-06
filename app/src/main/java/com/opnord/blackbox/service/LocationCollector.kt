@@ -36,8 +36,8 @@ class FusedLocationCollector(context: Context) : LocationCollector {
         callback = listener
         idleMode = idle
         client.requestLocationUpdates(
-            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, if (idle) 15_000L else 1_000L)
-                .setMinUpdateIntervalMillis(if (idle) 10_000L else 1_000L)
+            LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, if (idle) 15_000L else 2_000L)
+                .setMinUpdateIntervalMillis(if (idle) 10_000L else 2_000L)
                 .setWaitForAccurateLocation(false)
                 .build(), listener, android.os.Looper.getMainLooper()
         )

@@ -2,6 +2,7 @@ package com.opnord.blackbox.obd
 
 /** Mode 01 PIDs with fixed, known SAE J1979 response lengths and formulas. */
 enum class ObdPid(val code: Int, val label: String, val unit: String, val bytes: Int, val decode: (Int, Int) -> Double) {
+    FUEL_SYSTEM_STATUS(0x03,"fuel_system_status","bitfield",2,{a,b->a * 256.0 + b}),
     ENGINE_LOAD(0x04,"engine_load","%",1,{a,_->a*100.0/255}),
     COOLANT(0x05,"coolant","C",1,{a,_->a-40.0}),
     SHORT_FUEL_TRIM_1(0x06,"short_fuel_trim_1","%",1,{a,_->(a-128)*100.0/128}),
@@ -25,6 +26,22 @@ enum class ObdPid(val code: Int, val label: String, val unit: String, val bytes:
     DISTANCE_MIL(0x21,"distance_mil","km",2,{a,b->(a*256+b).toDouble()}),
     RAIL_PRESSURE_VACUUM(0x22,"rail_pressure_vacuum","kPa",2,{a,b->(a*256+b)*0.079}),
     RAIL_PRESSURE(0x23,"rail_pressure","kPa",2,{a,b->(a*256+b)*10.0}),
+    OXYGEN_SENSOR_1(0x14,"oxygen_sensor_1_voltage","V",2,{a,_->a/200.0}),
+    OXYGEN_SENSOR_2(0x15,"oxygen_sensor_2_voltage","V",2,{a,_->a/200.0}),
+    OXYGEN_SENSOR_3(0x16,"oxygen_sensor_3_voltage","V",2,{a,_->a/200.0}),
+    OXYGEN_SENSOR_4(0x17,"oxygen_sensor_4_voltage","V",2,{a,_->a/200.0}),
+    OXYGEN_SENSOR_5(0x18,"oxygen_sensor_5_voltage","V",2,{a,_->a/200.0}),
+    OXYGEN_SENSOR_6(0x19,"oxygen_sensor_6_voltage","V",2,{a,_->a/200.0}),
+    OXYGEN_SENSOR_7(0x1A,"oxygen_sensor_7_voltage","V",2,{a,_->a/200.0}),
+    OXYGEN_SENSOR_8(0x1B,"oxygen_sensor_8_voltage","V",2,{a,_->a/200.0}),
+    OXYGEN_SENSOR_1_WIDEBAND(0x24,"oxygen_sensor_1_equivalence_ratio","ratio",4,{a,b->(a*256+b)/32768.0}),
+    OXYGEN_SENSOR_2_WIDEBAND(0x25,"oxygen_sensor_2_equivalence_ratio","ratio",4,{a,b->(a*256+b)/32768.0}),
+    OXYGEN_SENSOR_3_WIDEBAND(0x26,"oxygen_sensor_3_equivalence_ratio","ratio",4,{a,b->(a*256+b)/32768.0}),
+    OXYGEN_SENSOR_4_WIDEBAND(0x27,"oxygen_sensor_4_equivalence_ratio","ratio",4,{a,b->(a*256+b)/32768.0}),
+    OXYGEN_SENSOR_5_WIDEBAND(0x28,"oxygen_sensor_5_equivalence_ratio","ratio",4,{a,b->(a*256+b)/32768.0}),
+    OXYGEN_SENSOR_6_WIDEBAND(0x29,"oxygen_sensor_6_equivalence_ratio","ratio",4,{a,b->(a*256+b)/32768.0}),
+    OXYGEN_SENSOR_7_WIDEBAND(0x2A,"oxygen_sensor_7_equivalence_ratio","ratio",4,{a,b->(a*256+b)/32768.0}),
+    OXYGEN_SENSOR_8_WIDEBAND(0x2B,"oxygen_sensor_8_equivalence_ratio","ratio",4,{a,b->(a*256+b)/32768.0}),
     EGR_COMMAND(0x2C,"egr_command","%",1,{a,_->a*100.0/255}),
     EGR_ERROR(0x2D,"egr_error","%",1,{a,_->(a-128)*100.0/128}),
     EVAP_PURGE(0x2E,"evap_purge","%",1,{a,_->a*100.0/255}),
@@ -93,15 +110,34 @@ object Elm327Parser {
         return ObdResult.Value(pid, pid.decode(a, b))
     }
 
+    /** Preserve an advertised but unmapped PID only when its single-ECU reply is unambiguous. */
+    fun rawUnsignedValue(raw: String, pidCode: Int): Long? {
+        val text = raw.uppercase().replace(">", " ")
+        if (adapterErrors.any(text::contains) || text.contains("NO DATA")) return null
+        val bytes = responseBytes(text)
+        val replies = (0 until bytes.size - 1).filter { bytes[it] == 0x41 && bytes[it + 1] == pidCode }
+        if (replies.size != 1) return null
+        val offset = replies.single()
+        val data = bytes.drop(offset + 2)
+        // Unknown PID widths vary. Reject empty, oversized, multi-response, and multi-ECU replies.
+        if (data.isEmpty() || data.size > 4) return null
+        return data.fold(0L) { value, byte -> (value shl 8) or byte.toLong() }
+    }
+
     /** Decode the four-byte support bitmap returned by 0100, 0120, 0140, 0160, or 0180. */
     fun supportedPids(raw: String, rangeStart: Int): Set<ObdPid> {
+        return supportedPidCodes(raw, rangeStart).mapNotNullTo(mutableSetOf(), ObdPid::fromCode)
+    }
+
+    fun supportedPidCodes(raw: String, rangeStart: Int): Set<Int> {
         val bytes = responseBytes(raw)
         val offset = (0 until bytes.size - 1).firstOrNull { bytes[it] == 0x41 && bytes[it + 1] == rangeStart } ?: return emptySet()
         if (bytes.size < offset + 6) return emptySet()
         val bitmap = bytes.subList(offset + 2, offset + 6)
-        return ObdPid.entries.filter { pid ->
-            val bit = pid.code - rangeStart - 1
-            bit in 0..31 && (bitmap[bit / 8] and (1 shl (7 - bit % 8))) != 0
+        return (0..31).mapNotNull { bit ->
+            val code = rangeStart + bit + 1
+            // The final bitmap bit advertises the next bitmap range; it is not a sensor PID.
+            code.takeIf { bit < 31 && (bitmap[bit / 8] and (1 shl (7 - bit % 8))) != 0 }
         }.toSet()
     }
 }
