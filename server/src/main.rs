@@ -149,6 +149,23 @@ struct Ack {
     schema_version: u32,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EcuIdentityReportBody {
+    device_id: Uuid,
+    observed_at: DateTime<Utc>,
+    report: Value,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EcuIdentityReportOut {
+    device_id: Uuid,
+    observed_at: DateTime<Utc>,
+    received_at: DateTime<Utc>,
+    report: Value,
+}
+
 fn canonical(v: Value) -> Value {
     match v {
         Value::Array(xs) => Value::Array(xs.into_iter().map(canonical).collect()),
@@ -191,6 +208,145 @@ fn valid_device_token(token: &str) -> bool {
         && token
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+fn bearer_token(headers: &HeaderMap) -> Result<&str> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| {
+            err(
+                StatusCode::UNAUTHORIZED,
+                "unauthorized",
+                "device bearer token required",
+            )
+        })
+}
+
+async fn ecu_identity_report(
+    State(s): State<App>,
+    headers: HeaderMap,
+    Json(body): Json<EcuIdentityReportBody>,
+) -> Result<StatusCode> {
+    let token = bearer_token(&headers)?;
+    let report_bytes = serde_json::to_vec(&body.report).map_err(|_| {
+        err(
+            StatusCode::BAD_REQUEST,
+            "invalid_json",
+            "could not encode report",
+        )
+    })?;
+    if body.report.is_null() || report_bytes.len() > 65_536 {
+        return Err(err(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "report_too_large",
+            "report must be a JSON object no larger than 65536 bytes",
+        ));
+    }
+    if !body.report.is_object() {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "invalid_report",
+            "report must be a JSON object",
+        ));
+    }
+
+    let token_hash = Sha256::digest(token.as_bytes()).to_vec();
+    let row = sqlx::query(
+        "SELECT token_hash, token_revoked_at, vehicle_id FROM devices WHERE id=$1",
+    )
+    .bind(body.device_id)
+    .fetch_optional(&s.db)
+    .await
+    .map_err(db_err)?;
+    let Some(row) = row else {
+        return Err(err(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "invalid device token",
+        ));
+    };
+    let stored_hash: Vec<u8> = row.try_get("token_hash").map_err(db_err)?;
+    let revoked_at: Option<DateTime<Utc>> = row.try_get("token_revoked_at").map_err(db_err)?;
+    let vehicle_id: Option<Uuid> = row.try_get("vehicle_id").map_err(db_err)?;
+    if revoked_at.is_some() || stored_hash != token_hash {
+        return Err(err(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "invalid device token",
+        ));
+    }
+    let Some(vehicle_id) = vehicle_id else {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "device_unassigned",
+            "device has no current vehicle",
+        ));
+    };
+    let assigned = sqlx::query(
+        "SELECT 1 FROM device_vehicle_assignments
+         WHERE device_id=$1 AND vehicle_id=$2 AND unassigned_at IS NULL",
+    )
+    .bind(body.device_id)
+    .bind(vehicle_id)
+    .fetch_optional(&s.db)
+    .await
+    .map_err(db_err)?;
+    if assigned.is_none() {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "assignment_missing",
+            "device has no matching active vehicle assignment",
+        ));
+    }
+
+    sqlx::query(
+        "INSERT INTO ecu_identity_reports(device_id, observed_at, report)
+         VALUES($1, $2, $3)
+         ON CONFLICT(device_id) DO UPDATE
+         SET observed_at=EXCLUDED.observed_at, report=EXCLUDED.report, updated_at=now()
+         WHERE ecu_identity_reports.observed_at < EXCLUDED.observed_at",
+    )
+    .bind(body.device_id)
+    .bind(body.observed_at)
+    .bind(body.report)
+    .execute(&s.db)
+    .await
+    .map_err(db_err)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn vehicle_ecu_identity_report(
+    State(s): State<App>,
+    headers: HeaderMap,
+    Path(vehicle_id): Path<Uuid>,
+) -> Result<Response> {
+    dashboard(&s.db, &headers).await?;
+    let row = sqlx::query(
+        "SELECT r.device_id, r.observed_at, r.updated_at AS received_at, r.report
+         FROM ecu_identity_reports r
+         JOIN devices d ON d.id=r.device_id AND d.vehicle_id=$1
+         JOIN device_vehicle_assignments a ON a.device_id=d.id
+              AND a.vehicle_id=$1 AND a.unassigned_at IS NULL
+         ORDER BY r.observed_at DESC, r.device_id
+         LIMIT 1",
+    )
+    .bind(vehicle_id)
+    .fetch_optional(&s.db)
+    .await
+    .map_err(db_err)?;
+    let Some(row) = row else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+    Ok(Json(EcuIdentityReportOut {
+        device_id: row.try_get("device_id").map_err(db_err)?,
+        observed_at: row.try_get("observed_at").map_err(db_err)?,
+        received_at: row.try_get("received_at").map_err(db_err)?,
+        report: row.try_get("report").map_err(db_err)?,
+    })
+    .into_response())
 }
 
 async fn record_failed_device(
@@ -2032,6 +2188,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
         .route("/api/v1/telemetry/batches", post(ingest))
+        .route("/api/v1/devices/ecu-identity", post(ecu_identity_report))
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/session", get(auth_session))
         .route("/api/v1/auth/logout", post(logout))
@@ -2052,6 +2209,10 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/v1/vehicles/:vehicle_id/trips", get(trips))
         .route("/api/v1/vehicles/:vehicle_id/status", get(vehicle_status))
+        .route(
+            "/api/v1/vehicles/:vehicle_id/ecu-identity",
+            get(vehicle_ecu_identity_report),
+        )
         .route("/api/v1/trips/:trip_id/gps", get(gps))
         .route("/api/v1/trips/:trip_id/events", get(trip_events))
         .route("/api/v1/trips/:trip_id/metrics", get(metrics))

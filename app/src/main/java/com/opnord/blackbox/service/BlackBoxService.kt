@@ -14,6 +14,7 @@ import androidx.lifecycle.LifecycleService
 import androidx.room.withTransaction
 import com.opnord.blackbox.storage.*
 import com.opnord.blackbox.sync.TelemetrySyncWorker
+import com.opnord.blackbox.sync.EcuIdentitySyncWorker
 import com.opnord.blackbox.trip.*
 import com.opnord.blackbox.obd.*
 import kotlinx.coroutines.*
@@ -330,10 +331,12 @@ class BlackBoxService : LifecycleService() {
                 ?: throw IllegalStateException("Bluetooth non disponibile")
             val report = EcuIdentityScanner().scan(BluetoothSppObdTransport(device))
             val useful = report.reads.any { it.status == DiagnosticStatus.SUCCESS }
+            val observedAt = maxOf(System.currentTimeMillis(), prefs.getLong("ecu_identity_at", 0L) + 1L)
             prefs.edit().putString("ecu_identity_status", if (useful) "completata" else "nessuna identificazione disponibile")
                 .putString("ecu_identity_summary", report.summary())
                 .putString("ecu_identity_report", report.toJson())
-                .putLong("ecu_identity_at", System.currentTimeMillis()).apply()
+                .putLong("ecu_identity_at", observedAt).apply()
+            EcuIdentitySyncWorker.scheduleOnce(this)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {

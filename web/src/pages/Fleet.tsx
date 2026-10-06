@@ -1,11 +1,20 @@
 import type { Dispatch, SetStateAction, FormEvent } from 'react'
-import type { ManagedDevice, Vehicle, VehicleStatus } from '../api'
+import type { ManagedDevice, Vehicle, VehicleEcuIdentity, VehicleStatus } from '../api'
 import { formatDate, metricLabel } from './format'
 
 type VehicleForm = { displayName: string; make: string; model: string; modelYear: string }
-type Props = { vehicles: Vehicle[]; devices: ManagedDevice[]; selectedId: string; selectedVehicle?: Vehicle; selectedDevice?: ManagedDevice; deviceFresh: boolean; vehicleStatus: VehicleStatus | null; statusError: string; vehicleMessage: string; vehicleEditing: string | null; vehicleForm: VehicleForm; setVehicleForm: Dispatch<SetStateAction<VehicleForm>>; vehicleBusy: boolean; saveVehicle: (event: FormEvent) => Promise<void>; editVehicle: (vehicle?: Vehicle) => void; setVehicleEditing: Dispatch<SetStateAction<string | null>>; selectVehicle: (id: string) => void; openTrip: (id: string) => void }
+type Props = { vehicles: Vehicle[]; devices: ManagedDevice[]; selectedId: string; selectedVehicle?: Vehicle; selectedDevice?: ManagedDevice; deviceFresh: boolean; vehicleStatus: VehicleStatus | null; statusError: string; ecuIdentity: VehicleEcuIdentity | null; ecuIdentityError: string; vehicleMessage: string; vehicleEditing: string | null; vehicleForm: VehicleForm; setVehicleForm: Dispatch<SetStateAction<VehicleForm>>; vehicleBusy: boolean; saveVehicle: (event: FormEvent) => Promise<void>; editVehicle: (vehicle?: Vehicle) => void; setVehicleEditing: Dispatch<SetStateAction<string | null>>; selectVehicle: (id: string) => void; openTrip: (id: string) => void; now: number }
 
-export default function Fleet({ vehicles, devices, selectedId, selectedVehicle, selectedDevice, deviceFresh, vehicleStatus, statusError, vehicleMessage, vehicleEditing, vehicleForm, setVehicleForm, vehicleBusy, saveVehicle, editVehicle, setVehicleEditing, selectVehicle, openTrip }: Props) {
+const freshness = (timestamp: string | undefined, now: number) => {
+  if (!timestamp) return 'Orario non disponibile'
+  const age = now - Date.parse(timestamp)
+  if (!Number.isFinite(age)) return 'Orario non valido'
+  return age <= 10 * 60_000 ? 'Recente' : 'Obsoleto'
+}
+const ecuLabels: Record<string, string> = { '0904': 'ID calibrazione', '0906': 'CVN', '090A': 'Nome ECU' }
+const metricSource = (name: string) => name.startsWith('device.') ? 'Telefono' : name.startsWith('obd.calc.') ? 'Calcolato' : 'OBD'
+
+export default function Fleet({ vehicles, devices, selectedId, selectedVehicle, selectedDevice, deviceFresh, vehicleStatus, statusError, ecuIdentity, ecuIdentityError, vehicleMessage, vehicleEditing, vehicleForm, setVehicleForm, vehicleBusy, saveVehicle, editVehicle, setVehicleEditing, selectVehicle, openTrip, now }: Props) {
   return (
     <>
 <div className="page-heading">
@@ -93,22 +102,39 @@ export default function Fleet({ vehicles, devices, selectedId, selectedVehicle, 
 </div>}
 {selectedVehicle && <section className="fleet-telemetry">
   <div className="section-head">
-    <div><span className="eyebrow">ULTIMA RILEVAZIONE</span><h2>Posizione e sensori</h2></div>
+    <div><span className="eyebrow">DATI RICEVUTI</span><h2>Telemetria del veicolo</h2></div>
     {vehicleStatus?.tripId && <button className="row-action" onClick={() => openTrip(vehicleStatus.tripId!)}>Esplora viaggio ↗</button>}
   </div>
   {statusError && <p className="inspector-muted">{statusError}</p>}
   {!vehicleStatus && !statusError && <p className="inspector-muted">Caricamento stato…</p>}
   {vehicleStatus?.gps ? <div className="fleet-position">
-    <span>GPS · {formatDate(vehicleStatus.gps.observedAt)}</span>
+    <span>GPS · sorgente posizione · {formatDate(vehicleStatus.gps.observedAt)} · {freshness(vehicleStatus.gps.observedAt, now)}</span>
     <strong>{Math.abs(vehicleStatus.gps.latitude).toFixed(5)}° {vehicleStatus.gps.latitude >= 0 ? 'N' : 'S'} · {Math.abs(vehicleStatus.gps.longitude).toFixed(5)}° {vehicleStatus.gps.longitude >= 0 ? 'E' : 'O'}</strong>
     <span>{vehicleStatus.gps.speedMps == null ? 'Velocità non disponibile' : `${(vehicleStatus.gps.speedMps * 3.6).toFixed(1)} km/h`}</span>
   </div> : vehicleStatus && <p className="inspector-muted">Nessun punto GPS disponibile.</p>}
   {vehicleStatus?.metrics.length ? <div className="fleet-metrics">
     {vehicleStatus.metrics.map(metric => <div key={metric.name}>
-      <span>{metricLabel({ name: metric.name, unit: metric.unit })}<small>{formatDate(metric.observedAt)}</small></span>
+      <span>{metricLabel({ name: metric.name, unit: metric.unit })}<small>{metricSource(metric.name)} · {formatDate(metric.observedAt)} · {freshness(metric.observedAt, now)}</small></span>
       <strong>{metric.value.toLocaleString('it-IT', { maximumFractionDigits: 2 })} {metric.unit}</strong>
     </div>)}
   </div> : vehicleStatus && <p className="inspector-muted">Nessun segnale disponibile.</p>}
+</section>}
+{selectedVehicle && <section className="fleet-telemetry ecu-panel">
+  <div className="section-head"><div><span className="eyebrow">DIAGNOSTICA · MODE 09</span><h2>Identificazione ECU</h2></div></div>
+  {ecuIdentityError && <p className="inspector-muted">{ecuIdentityError}</p>}
+  {!ecuIdentity && !ecuIdentityError && <p className="inspector-muted">Nessun report ECU ricevuto.</p>}
+  {ecuIdentity && <>
+    <div className="ecu-meta"><span>Dispositivo <code>{ecuIdentity.deviceId}</code></span><span>Rilevato {formatDate(ecuIdentity.observedAt)} · ricevuto {formatDate(ecuIdentity.receivedAt)}</span></div>
+    <div className="ecu-meta"><span>Adattatore <strong>{ecuIdentity.report.adapter || '—'}</strong></span><span>Protocollo <strong>{[ecuIdentity.report.protocol_number, ecuIdentity.report.protocol_name].filter(Boolean).join(' · ') || '—'}</strong></span></div>
+    {ecuIdentity.report.error && <p className="inspector-muted">{ecuIdentity.report.error}</p>}
+    {(ecuIdentity.report.reads || []).filter(read => ['0904', '0906', '090A'].includes(read.command)).map(read => {
+      const entries = Object.entries(read.values_by_ecu || {})
+      return <div className="ecu-read" key={read.command}><strong>{ecuLabels[read.command] || read.command}</strong>
+        {entries.length ? entries.map(([ecu, value]) => <div className="ecu-value" key={ecu}><code>{ecu}</code><span>{value}</span></div>) : <span className="inspector-muted">{read.detail || read.status}</span>}
+      </div>
+    })}
+    <details className="ecu-raw"><summary>Mostra report grezzo</summary><pre>{JSON.stringify(ecuIdentity.report, null, 2)}</pre></details>
+  </>}
 </section>}
 </>
   )

@@ -24,6 +24,7 @@ import androidx.lifecycle.lifecycleScope
 import com.opnord.blackbox.service.BlackBoxService
 import com.opnord.blackbox.storage.BlackBoxDatabase
 import com.opnord.blackbox.sync.SyncConfigurationStore
+import com.opnord.blackbox.sync.EcuIdentitySyncWorker
 import com.opnord.blackbox.sync.TelemetrySyncWorker
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
@@ -101,6 +102,7 @@ class MainActivity : ComponentActivity() {
             addView(content)
         }
         setContentView(scrollView)
+        EcuIdentitySyncWorker.scheduleOnce(this)
         val db = BlackBoxDatabase.get(this)
         lifecycleScope.launch {
             combine(db.trips().countFlow(), db.samples().countFlow(), db.samples().unsyncedCountFlow()) { trips, samples, pending -> Triple(trips, samples, pending) }
@@ -150,6 +152,7 @@ class MainActivity : ComponentActivity() {
         val ecuStatus = diagnostics.getString("ecu_identity_status", null)
         val ecuSummary = diagnostics.getString("ecu_identity_summary", null)
         val ecuAt = diagnostics.getLong("ecu_identity_at", 0L)
+        val ecuSyncStatus = diagnostics.getString("ecu_sync_status", null)
         info.text = "Permesso posizione: ${if (hasBackgroundLocation()) "sempre" else "mancante"}\n" +
             "Viaggi salvati: $tripCount\nCampioni locali: $sampleCount\nIn attesa di sincronizzazione: $pendingCount\n\n" +
             "GPS: $gpsStatus${if (lastGps > 0) " · ultimo punto ${DateFormat.format("dd/MM HH:mm:ss", lastGps)}" else ""}\n" +
@@ -160,6 +163,7 @@ class MainActivity : ComponentActivity() {
             (if (diagnosticSummary != null) "$diagnosticSummary\n" else "") +
             (if (ecuStatus != null) "Identificazione ECU: $ecuStatus${if (ecuAt > 0) " · ${DateFormat.format("dd/MM HH:mm", ecuAt)}" else ""}\n" else "") +
             (if (ecuSummary != null) "$ecuSummary\n" else "") +
+            (if (ecuSyncStatus != null) "Invio ECU: $ecuSyncStatus\n" else "") +
             "Sincronizzazione: $syncStatus\n" +
             "Ultimo tentativo: ${if (lastAttempt > 0) DateFormat.format("dd/MM HH:mm", lastAttempt) else "mai"}\n" +
             "Ultimo successo: ${if (lastSuccess > 0) DateFormat.format("dd/MM HH:mm", lastSuccess) else "mai"}\n\n" +
@@ -188,6 +192,7 @@ class MainActivity : ComponentActivity() {
         bearerToken.text.clear()
         TelemetrySyncWorker.schedule(this)
         TelemetrySyncWorker.retryNow(this)
+        EcuIdentitySyncWorker.scheduleOnce(this)
         info.text = "Configurazione salvata. I batch locali useranno l'ID attuale; sincronizzazione avviata su Wi-Fi.\n" +
             "Viaggi salvati: $tripCount\nCampioni locali: $sampleCount\nIn attesa di sincronizzazione: $pendingCount"
     }

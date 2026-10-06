@@ -81,6 +81,8 @@ Success is HTTP 200 with `{ "batchId": "...", "accepted": true, "gpsAccepted": 1
 
 ### Dashboard reads
 
+`POST /api/v1/devices/ecu-identity` accepts device bearer authentication and `{ "deviceId": "UUID", "observedAt": "RFC3339", "report": { ... } }`. `report` is the Android Mode 09 identification object, capped at 64 KiB. The device must be assigned to a vehicle. The latest report per device is retained; older retries cannot replace a newer report. Success is HTTP 204.
+
 Dashboard login endpoints:
 
 - `POST /api/v1/auth/login` with JSON `{ "username": "admin", "password": "..." }` sets an HttpOnly session cookie and returns `{ "username": "admin" }`.
@@ -96,6 +98,7 @@ Dashboard reads require the session cookie and return arrays directly. Device be
 - `GET /api/v1/vehicles` → `[{ "id": "...", "displayName": "Car", "make": null, "model": null, "modelYear": null, "currentDeviceId": "..." }]`.
 - `POST /api/v1/vehicles` and `PUT /api/v1/vehicles/{vehicleId}` accept `{ "displayName": "Giulietta", "make": "Alfa Romeo", "model": "Giulietta", "modelYear": 2020 }` to create or update a vehicle.
 - `GET /api/v1/vehicles/{vehicleId}/status` → latest trip ID, its newest GPS point, and latest reading per metric in that trip. Each reading includes its own observation timestamp so stale values are visible.
+- `GET /api/v1/vehicles/{vehicleId}/ecu-identity` → latest report for a currently assigned device: `{ "deviceId": "UUID", "observedAt": "RFC3339", "receivedAt": "RFC3339", "report": { ... } }`. Returns HTTP 204 when absent. Dashboard session required.
 - `GET /api/v1/vehicles/{vehicleId}/trips?limit=100` → `[{ "id": "...", "startedAt": "...", "endedAt": "...", "startReason": "activity", "endReason": "stationary", "distanceGpsM": 1532.4, "distanceObdM": null }]`. Default limit 100, max 500.
 - `GET /api/v1/trips/{tripId}/gps?limit=5000` → `[{ "sampleId": "...", "observedAt": "...", "deltaSec": 1.0, "deltaM": 8.2, "latitude": 45.4642, "longitude": 9.19, "altitudeM": 122.0, "speedMps": 8.2, "bearingDeg": 90.0, "horizontalAccuracyM": 5.0 }]`. Default 5000, max 10000, oldest first. First point has null deltas. Ordering uses `(observedAt, sampleId)`; `deltaM` is PostGIS ground distance from preceding point. Continue with `afterAt` and `afterSampleId` set to the last row's values to fetch the next page.
 - `GET /api/v1/trips/{tripId}/events` → `[{ "eventId": "...", "stopId": "...", "kind": "stop_start", "observedAt": "...", "latitude": 45.46, "longitude": 9.19 }]`, ordered by `(observedAt, eventId)`. Dashboard session required. Each stop is represented by paired `stop_start` and `stop_end` events sharing `stopId`; render both as markers over the trip GPS line.

@@ -66,6 +66,9 @@ export async function updateMetricDefinition(name: string, displayName: string, 
 }
 export type MetricSample = { sampleId: string; observedAt: string; name: string; unit: string; value: number }
 export type VehicleStatus = { tripId: string | null; gps: GpsSample | null; metrics: MetricSample[] }
+export type EcuIdentityRead = { command: string; status: string; raw: string; values_by_ecu?: Record<string, string>; detail?: string | null }
+export type EcuIdentityReport = { summary?: string; adapter?: string | null; protocol_number?: string | null; protocol_name?: string | null; error?: string | null; reads?: EcuIdentityRead[] }
+export type VehicleEcuIdentity = { deviceId: string; observedAt: string; receivedAt: string; report: EcuIdentityReport }
 
 export class ApiError extends Error {
   constructor(message: string, readonly status?: number) {
@@ -156,6 +159,16 @@ export async function fetchVehicles(signal?: AbortSignal) {
 
 export async function fetchVehicleStatus(vehicleId: string, signal?: AbortSignal): Promise<VehicleStatus> {
   return request<VehicleStatus>(`/api/v1/vehicles/${encodeURIComponent(vehicleId)}/status`, { signal })
+}
+
+export async function fetchVehicleEcuIdentity(vehicleId: string, signal?: AbortSignal): Promise<VehicleEcuIdentity | null> {
+  try {
+    const result = await request<VehicleEcuIdentity | VehicleEcuIdentity[]>(`/api/v1/vehicles/${encodeURIComponent(vehicleId)}/ecu-identity`, { signal })
+    return Array.isArray(result) ? null : result
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null
+    throw error
+  }
 }
 
 export async function createVehicle(input: VehicleInput): Promise<Vehicle> {

@@ -1140,6 +1140,25 @@ a {
   color:var(--ink);
   white-space:nowrap
 }
+.ecu-panel { margin-top:16px }
+.ecu-meta {
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:space-between;
+  gap:8px 24px;
+  padding:12px 0;
+  border-bottom:1px solid var(--line);
+  color:var(--muted);
+  font-size:12px
+}
+.ecu-meta strong,.ecu-meta code { color:var(--ink) }
+.ecu-read { padding:14px 0; border-bottom:1px solid var(--line) }
+.ecu-read>strong { display:block; margin-bottom:8px; color:var(--ink); font-size:13px }
+.ecu-value { display:grid; grid-template-columns:minmax(72px,auto) 1fr; gap:12px; padding:5px 0; color:var(--ink); font-size:12px }
+.ecu-value code { color:var(--muted) }
+.ecu-raw { margin-top:14px; color:var(--ink); font-size:12px }
+.ecu-raw summary { cursor:pointer }
+.ecu-raw pre { max-height:360px; overflow:auto; padding:14px; background:var(--dark); color:#d6eee3; border-radius:6px; white-space:pre-wrap; overflow-wrap:anywhere }
 
 :root[data-theme='dark'] {
   color-scheme:dark;
@@ -1174,6 +1193,7 @@ a {
 [data-theme='dark'] .fleet-telemetry {
   background:#1e2b24
 }
+[data-theme='dark'] .ecu-raw pre { background:#111c17 }
 
 [data-theme='dark'] .page-heading p,[data-theme='dark'] .map-heading>span,[data-theme='dark'] .inspector-data dt,[data-theme='dark'] .fleet-detail dt,[data-theme='dark'] .settings-layout dt,[data-theme='dark'] .nearby-list span,[data-theme='dark'] .admin-meta,[data-theme='dark'] .fleet-identity small,[data-theme='dark'] .fleet-devices,[data-theme='dark'] .overview-foot,[data-theme='dark'] .settings-layout p,[data-theme='dark'] .inspector-muted,[data-theme='dark'] .inspector-empty,[data-theme='dark'] .login-panel p {
   color:#a4b6a9
