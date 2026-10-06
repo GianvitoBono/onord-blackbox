@@ -1,6 +1,8 @@
 package com.opnord.blackbox.ui
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
@@ -79,6 +81,8 @@ class MainActivity : ComponentActivity() {
         content.addView(obdAddress)
         content.addView(Button(this).apply { text = "Scegli dispositivo Bluetooth associato"; setOnClickListener { selectObdDevice() } })
         content.addView(Button(this).apply { text = "Salva adattatore OBD"; setOnClickListener { saveObdConfiguration() } })
+        content.addView(Button(this).apply { text = "Scansiona errori OBD motore"; setOnClickListener { scanDiagnostics() } })
+        content.addView(Button(this).apply { text = "Copia risultato scansione"; setOnClickListener { copyDiagnosticReport() } })
         content.addView(Button(this).apply { text = "Salva configurazione e sincronizza"; setOnClickListener { saveSyncConfiguration() } })
         content.addView(Button(this).apply { text = "Sincronizza ora"; setOnClickListener { TelemetrySyncWorker.retryNow(this@MainActivity); refresh() } })
         content.addView(Button(this).apply { text = "Configura permessi posizione"; setOnClickListener { requestLocationPermissions() } })
@@ -138,12 +142,17 @@ class MainActivity : ComponentActivity() {
         val lastSuccess = diagnostics.getLong("last_sync_success", 0L)
         val lastObd = diagnostics.getLong("last_obd", 0L)
         val obdSupported = diagnostics.getInt("obd_supported", -1)
+        val diagnosticStatus = diagnostics.getString("diagnostic_status", null)
+        val diagnosticSummary = diagnostics.getString("diagnostic_summary", null)
+        val diagnosticAt = diagnostics.getLong("diagnostic_at", 0L)
         info.text = "Permesso posizione: ${if (hasBackgroundLocation()) "sempre" else "mancante"}\n" +
             "Viaggi salvati: $tripCount\nCampioni locali: $sampleCount\nIn attesa di sincronizzazione: $pendingCount\n\n" +
             "GPS: $gpsStatus${if (lastGps > 0) " · ultimo punto ${DateFormat.format("dd/MM HH:mm:ss", lastGps)}" else ""}\n" +
             "OBD: ${diagnostics.getString("obd_status", "non connesso") ?: "non connesso"}\n" +
             (if (obdSupported >= 0) "PID OBD dichiarati: $obdSupported · decodificati: ${diagnostics.getInt("obd_known", 0)} · raw: ${diagnostics.getInt("obd_raw", 0)}\n" else "") +
             (if (lastObd > 0) "Ultimi valori OBD: ${diagnostics.getInt("obd_last_values", 0)} · ${DateFormat.format("dd/MM HH:mm:ss", lastObd)}\n" else "") +
+            (if (diagnosticStatus != null) "Scansione OBD: $diagnosticStatus${if (diagnosticAt > 0) " · ${DateFormat.format("dd/MM HH:mm", diagnosticAt)}" else ""}\n" else "") +
+            (if (diagnosticSummary != null) "$diagnosticSummary\n" else "") +
             "Sincronizzazione: $syncStatus\n" +
             "Ultimo tentativo: ${if (lastAttempt > 0) DateFormat.format("dd/MM HH:mm", lastAttempt) else "mai"}\n" +
             "Ultimo successo: ${if (lastSuccess > 0) DateFormat.format("dd/MM HH:mm", lastSuccess) else "mai"}\n\n" +
@@ -186,6 +195,32 @@ class MainActivity : ComponentActivity() {
             bluetoothPermission.launch(Manifest.permission.BLUETOOTH_CONNECT)
         }
         info.text = if (address.isEmpty()) "Raccolta OBD disattivata; GPS e logger restano attivi." else "Adattatore salvato. Avvia il logger con il dispositivo Bluetooth già associato."
+    }
+
+    private fun scanDiagnostics() {
+        val address = getSharedPreferences("obd_configuration", MODE_PRIVATE).getString("address", "").orEmpty()
+        if (address.isBlank()) {
+            info.text = "Scegli e salva prima l'adattatore OBD Bluetooth."
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 31 && ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            bluetoothPermission.launch(Manifest.permission.BLUETOOTH_CONNECT)
+            return
+        }
+        ContextCompat.startForegroundService(this, Intent(this, BlackBoxService::class.java).setAction(BlackBoxService.ACTION_SCAN_DIAGNOSTICS))
+        getSharedPreferences("diagnostics", MODE_PRIVATE).edit().putString("diagnostic_status", "scansione in corso").apply()
+    }
+
+    private fun copyDiagnosticReport() {
+        val prefs = getSharedPreferences("diagnostics", MODE_PRIVATE)
+        val summary = prefs.getString("diagnostic_summary", null)
+        if (summary.isNullOrBlank()) {
+            info.text = "Nessuna scansione disponibile. Esegui prima la scansione OBD."
+            return
+        }
+        val report = summary + "\n\n" + prefs.getString("diagnostic_report", "").orEmpty()
+        getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Diagnostica OBD", report))
+        info.text = "Risultato OBD copiato. Incollalo per analizzare codici e misure."
     }
 
     private fun selectObdDevice() {
