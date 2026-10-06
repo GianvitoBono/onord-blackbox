@@ -21,7 +21,15 @@ const encodedPidNames: Record<string, string> = {
   '01a1': 'Sensore NOx · dato corretto',
 }
 
+const decodedFieldNames: Record<string, string> = {
+  '0134.equivalence_ratio': 'Sonda O₂ 1 · rapporto aria/carburante',
+  '0134.current_ma': 'Sonda O₂ 1 · corrente',
+  '018e.friction_torque_pct': 'Coppia assorbita da attriti motore',
+}
+
 export function standardPidName(name: string): string | undefined {
+  const field = name.match(/^obd\.pid\.(01[0-9a-f]{2}\.[a-z0-9_]+)$/i)?.[1].toLowerCase()
+  if (field) return decodedFieldNames[field]
   const code = name.match(/^obd\.pid\.(01[0-9a-f]{2})$/i)?.[1].toLowerCase()
   return code ? encodedPidNames[code] : undefined
 }

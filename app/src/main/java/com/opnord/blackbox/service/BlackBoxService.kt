@@ -264,14 +264,23 @@ class BlackBoxService : LifecycleService() {
                         obdThrottlePct = v[ObdPid.THROTTLE], obdCoolantC = v[ObdPid.COOLANT], obdIntakeTempC = v[ObdPid.INTAKE_TEMP],
                         obdMafGps = v[ObdPid.MAF], obdFuelLevelPct = v[ObdPid.FUEL_LEVEL], obdVoltageV = v[ObdPid.CONTROL_MODULE_VOLTAGE],
                         obdValuesJson = org.json.JSONObject().apply {
-                            v.forEach { (pid, value) -> put("%02X".format(pid.code), value) }
+                            v.forEach { (pid, value) ->
+                                // Keep decoded fields separate from older raw series with the same PID.
+                                val field = when (pid) {
+                                    ObdPid.OXYGEN_SENSOR_1_WIDEBAND_MODE34 -> "34.equivalence_ratio"
+                                    ObdPid.ENGINE_FRICTION_TORQUE -> "8E.friction_torque_pct"
+                                    else -> "%02X".format(pid.code)
+                                }
+                                put(field, value)
+                            }
+                            reading.subvalues.forEach { (field, value) -> put(field, value) }
                             reading.rawValues.forEach { (code, value) -> put("raw.%02X".format(code), value) }
                             reading.derived.forEach { (name, value) -> put(name, value) }
                         }.toString()
                     ))
                     getSharedPreferences("diagnostics", MODE_PRIVATE).edit()
                         .putLong("last_obd", reading.observedAt)
-                        .putInt("obd_last_values", v.size + reading.rawValues.size + reading.derived.size).apply()
+                        .putInt("obd_last_values", v.size + reading.subvalues.size + reading.rawValues.size + reading.derived.size).apply()
                 }, onStatus = { status -> getSharedPreferences("diagnostics", MODE_PRIVATE).edit().putString("obd_status", status).apply() },
                     onDiscovery = { supported, known, raw -> getSharedPreferences("diagnostics", MODE_PRIVATE).edit()
                         .putInt("obd_supported", supported).putInt("obd_known", known).putInt("obd_raw", raw).apply() }).run()

@@ -58,6 +58,12 @@ internal object BatchPayload {
                 if (value.isFinite()) {
                     val id = java.util.UUID.nameUUIDFromBytes("${sample.id}:$pid".toByteArray(Charsets.UTF_8)).toString()
                     val definition = if (isRaw) null else shortPid.toIntOrNull(16)?.let(ObdPid::fromCode)
+                    val decodedField = when (shortPid) {
+                        "34.equivalence_ratio" -> "Sonda O₂ 1 · rapporto aria/carburante" to "ratio"
+                        "34.current_ma" -> "Sonda O₂ 1 · corrente" to "mA"
+                        "8E.friction_torque_pct" -> "Coppia assorbita da attriti motore" to "%"
+                        else -> null
+                    }
                     val derivedName = when (shortPid) {
                         "calc.manifold_gauge_pressure_kpa" -> "Estimated manifold gauge pressure (MAP − barometric)"
                         "calc.engine_torque_nm" -> "Estimated engine torque (actual % × reference Nm)"
@@ -71,8 +77,8 @@ internal object BatchPayload {
                     val rawName = if (isRaw) "Mode 01 PID $code raw unsigned integer" else null
                     val rawUnit = if (isRaw) "raw_unsigned_integer" else null
                     obd.put(JSONObject().put("sampleId", id).put("observedAt", timestamp(sample.timestamp)).put("pid", pid).put("value", value)
-                        .put("name", definition?.label?.replace('_', ' ') ?: derivedName ?: rawName ?: JSONObject.NULL)
-                        .put("unit", definition?.unit ?: derivedUnit ?: rawUnit ?: JSONObject.NULL))
+                        .put("name", decodedField?.first ?: definition?.label?.replace('_', ' ') ?: derivedName ?: rawName ?: JSONObject.NULL)
+                        .put("unit", decodedField?.second ?: definition?.unit ?: derivedUnit ?: rawUnit ?: JSONObject.NULL))
                 }
             }
         }

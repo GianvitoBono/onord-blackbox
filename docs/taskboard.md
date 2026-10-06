@@ -42,10 +42,12 @@ Stato al 2026-10-06. Le caselle indicano lavoro completato nel repository, non u
 
 - [x] Scelta iniziale BT classico SPP, permesso Bluetooth e selettore dispositivi già associati.
 - [ ] **Pairing OBD ripetuto:** a ogni collegamento l'OBDII richiede di nuovo il PIN. Sul Nord, `dumpsys bluetooth_manager` mostra il dispositivo attualmente `BONDED` ma tre sequenze di associazione nella giornata. L'app usa `createRfcommSocketToServiceRecord` e non chiama `createBond`/`removeBond`. Acquisire log Bluetooth al prossimo distacco/ricollegamento, verificare persistenza della chiave su telefono e adattatore e distinguere perdita del bond da semplice richiesta di autorizzazione. Criterio: tre cicli di spegnimento/riaccensione adattatore e un riavvio telefono, riconnessione SPP senza reinserire PIN né perdere telemetria.
+- [x] App 0.1.8: stato OBD distingue bond assente, bond perso durante connessione e errore socket con bond presente; necessario prossimo collegamento all'adattatore per identificare la causa del PIN ripetuto.
 - [x] `ObdTransport` astratto e fake; ELM327 init, PID discovery e riconnessione. Timeout lettura socket da verificare con adattatore reale.
 - [x] Parser per PID standard e bitmap supporto con test unitari; PID non supportati registrati come stato.
 - [x] Persistenza locale letture PID con ID e timestamp; payload compatibile con contratto P1. Migrazione Room v3 e schema generato.
 - [x] Catalogo Mode 01 ampliato, Room v4 con PID dinamici, scheduler prioritario e stime MAP−BARO/coppia; frontend mostra catalogo effettivamente raccolto.
+- [x] App 0.1.8: decodifica `0134` in rapporto aria/carburante e corrente, e `018E` in percentuale attriti; nuove serie distinte dallo storico raw. APK compilato e installato sul Nord via ADB.
 - [ ] Profilo Alfa/Fiat specifico per Giulietta: identificare e verificare ID/formule da acquisizione reale, incluse metriche DPF e turbo richiesto/effettivo.
 - [ ] Prove auto con dongle reale e misure di latenza/temperatura.
 

@@ -4,6 +4,7 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -23,9 +24,29 @@ class BluetoothSppObdTransport(private val device: BluetoothDevice) : ObdTranspo
     private val watchdogScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     override suspend fun connect() = withContext(Dispatchers.IO) {
         disconnect()
-        val candidate = device.createRfcommSocketToServiceRecord(SPP_UUID)
+        val beforeBondState = runCatching { device.bondState }.getOrDefault(BluetoothDevice.BOND_NONE)
+        if (beforeBondState != BluetoothDevice.BOND_BONDED) {
+            throw IOException("Bluetooth bond missing (bondState=$beforeBondState); pair the OBD adapter in Android settings")
+        }
+        val candidate = try {
+            device.createRfcommSocketToServiceRecord(SPP_UUID)
+        } catch (e: Exception) {
+            throw IOException("SPP socket creation failed while adapter is bonded: ${e.message ?: e.javaClass.simpleName}", e)
+        }
         val watchdog = watchdogScope.launch { delay(10_000); runCatching { candidate.close() } }
-        try { candidate.connect() } finally { watchdog.cancel() }
+        try {
+            candidate.connect()
+        } catch (e: CancellationException) {
+            runCatching { candidate.close() }
+            throw e
+        } catch (e: Exception) {
+            runCatching { candidate.close() }
+            val afterBondState = runCatching { device.bondState }.getOrDefault(BluetoothDevice.BOND_NONE)
+            val bondDetail = if (afterBondState == BluetoothDevice.BOND_BONDED) "bond still present" else "bond lost during connection (bondState=$afterBondState)"
+            throw IOException("SPP socket connect failed; $bondDetail: ${e.message ?: e.javaClass.simpleName}", e)
+        } finally {
+            watchdog.cancel()
+        }
         socket = candidate
         // Basic ELM setup; errors are passed through and will be handled by the client.
         for (cmd in listOf("ATZ", "ATE0", "ATL0", "ATS0", "ATH0", "ATSP0")) exchange(cmd, 5_000)

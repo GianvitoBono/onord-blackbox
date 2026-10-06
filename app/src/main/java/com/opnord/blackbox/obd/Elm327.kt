@@ -42,6 +42,7 @@ enum class ObdPid(val code: Int, val label: String, val unit: String, val bytes:
     OXYGEN_SENSOR_6_WIDEBAND(0x29,"oxygen_sensor_6_equivalence_ratio","ratio",4,{a,b->(a*256+b)/32768.0}),
     OXYGEN_SENSOR_7_WIDEBAND(0x2A,"oxygen_sensor_7_equivalence_ratio","ratio",4,{a,b->(a*256+b)/32768.0}),
     OXYGEN_SENSOR_8_WIDEBAND(0x2B,"oxygen_sensor_8_equivalence_ratio","ratio",4,{a,b->(a*256+b)/32768.0}),
+    OXYGEN_SENSOR_1_WIDEBAND_MODE34(0x34,"oxygen_sensor_1_equivalence_ratio","ratio",4,{a,b->(a*256+b)/32768.0}),
     EGR_COMMAND(0x2C,"egr_command","%",1,{a,_->a*100.0/255}),
     EGR_ERROR(0x2D,"egr_error","%",1,{a,_->(a-128)*100.0/128}),
     EVAP_PURGE(0x2E,"evap_purge","%",1,{a,_->a*100.0/255}),
@@ -78,13 +79,14 @@ enum class ObdPid(val code: Int, val label: String, val unit: String, val bytes:
     EMISSIONS_REQUIREMENTS(0x5F,"emissions_requirements","bitfield",1,{a,_->a.toDouble()}),
     DEMANDED_TORQUE(0x61,"demanded_torque","%",1,{a,_->a-125.0}),
     ACTUAL_TORQUE(0x62,"actual_torque","%",1,{a,_->a-125.0}),
-    REFERENCE_TORQUE(0x63,"reference_torque","Nm",2,{a,b->(a*256+b).toDouble()});
+    REFERENCE_TORQUE(0x63,"reference_torque","Nm",2,{a,b->(a*256+b).toDouble()}),
+    ENGINE_FRICTION_TORQUE(0x8E,"engine_friction_torque","%",1,{a,_->a-125.0});
 
     companion object { fun fromCode(code: Int) = entries.firstOrNull { it.code == code } }
 }
 
 sealed interface ObdResult {
-    data class Value(val pid: ObdPid, val value: Double) : ObdResult
+    data class Value(val pid: ObdPid, val value: Double, val subvalues: Map<String, Double> = emptyMap()) : ObdResult
     data class Unsupported(val pid: ObdPid) : ObdResult
     data class AdapterError(val message: String) : ObdResult
     data class Malformed(val message: String) : ObdResult
@@ -102,11 +104,24 @@ object Elm327Parser {
         if (text.contains("NO DATA")) return ObdResult.Unsupported(pid)
         val bytes = responseBytes(text)
         // Match positive Mode 01 response and require the full PID width; never decode echoed commands.
-        val response = (0 until bytes.size - 1).firstOrNull { bytes[it] == 0x41 && bytes[it + 1] == pid.code }
-            ?: return ObdResult.Malformed("No 41 ${"%02X".format(pid.code)} data in response")
+        val responses = (0 until bytes.size - 1).filter { bytes[it] == 0x41 && bytes[it + 1] == pid.code }
+        if (responses.isEmpty()) return ObdResult.Malformed("No 41 ${"%02X".format(pid.code)} data in response")
+        // Multiple ECU replies cannot be attributed to a single decoded value safely.
+        if (responses.size != 1) return ObdResult.Malformed("Ambiguous multi-ECU response for ${pid.label}")
+        val response = responses.single()
         val data = bytes.drop(response + 2)
+        if (pid.code == 0x34 && response > 0 && bytes[response - 1] in 1..7 && bytes[response - 1] != 6) {
+            return ObdResult.Malformed("Short ISO-TP payload for oxygen sensor 1 wideband PID")
+        }
         if (data.size < pid.bytes) return ObdResult.Malformed("Incomplete ${pid.label} response")
         val a = data[0]; val b = data.getOrElse(1) { 0 }
+        if (pid.code == 0x34) {
+            // SAE PID 0134 has two independent 16-bit fields: lambda*32768 and current*256+32768.
+            // Require all four bytes before returning either measurement.
+            val lambda = (data[0] * 256 + data[1]) / 32768.0
+            val currentMa = (data[2] * 256 + data[3]) / 256.0 - 128.0
+            return ObdResult.Value(pid, lambda, mapOf("current_ma" to currentMa))
+        }
         return ObdResult.Value(pid, pid.decode(a, b))
     }
 

@@ -12,7 +12,9 @@ data class ObdReading(
     val errors: List<ObdResult>,
     val derived: Map<String, Double> = emptyMap(),
     /** Advertised standard PIDs without a known SAE formula, represented as unsigned raw integers. */
-    val rawValues: Map<Int, Long> = emptyMap()
+    val rawValues: Map<Int, Long> = emptyMap(),
+    /** Separately decoded fields of a multi-value standard PID. */
+    val subvalues: Map<String, Double> = emptyMap()
 )
 
 /** Serial, bounded discovery/poll loop. Errors are reported and never terminate the caller's logger. */
@@ -49,6 +51,7 @@ class ObdPoller(
                     val roundStarted = System.currentTimeMillis()
                     val values = mutableMapOf<ObdPid, Double>()
                     val rawValues = mutableMapOf<Int, Long>()
+                    val subvalues = mutableMapOf<String, Double>()
                     val errors = mutableListOf<ObdResult>()
                     // Keep each sample responsive even when ECU advertises dozens of PIDs.
                     val batch = if (requested.size <= 8) requested else {
@@ -60,7 +63,10 @@ class ObdPoller(
                     batch.forEach { pid ->
                         try {
                             when (val result = Elm327Parser.parse(withTimeout(commandTimeoutMs) { transport.exchange("01%02X".format(pid.code), commandTimeoutMs) }, pid)) {
-                                is ObdResult.Value -> values[pid] = result.value
+                                is ObdResult.Value -> {
+                                    values[pid] = result.value
+                                    result.subvalues.forEach { (field, value) -> subvalues["%02X.$field".format(pid.code)] = value }
+                                }
                                 else -> errors += result
                             }
                         } catch (e: CancellationException) { throw e }
@@ -97,7 +103,7 @@ class ObdPoller(
                     }
                     if (values.isNotEmpty() || rawValues.isNotEmpty()) {
                         emptyRounds = 0
-                        onReading(ObdReading(observedAt, values, errors, derived, rawValues))
+                        onReading(ObdReading(observedAt, values, errors, derived, rawValues, subvalues))
                     } else if (requested.isNotEmpty() || rawRequested.isNotEmpty()) {
                         emptyRounds++
                         onStatus("connected; supported_pids=${supported.size}; no_data_rounds=$emptyRounds; errors=${errors.size}")
