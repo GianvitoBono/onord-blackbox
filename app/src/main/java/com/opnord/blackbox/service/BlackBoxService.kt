@@ -15,6 +15,7 @@ import androidx.room.withTransaction
 import com.opnord.blackbox.storage.*
 import com.opnord.blackbox.sync.TelemetrySyncWorker
 import com.opnord.blackbox.sync.EcuIdentitySyncWorker
+import com.opnord.blackbox.sync.DiagnosticReportSyncWorker
 import com.opnord.blackbox.trip.*
 import com.opnord.blackbox.obd.*
 import kotlinx.coroutines.*
@@ -299,10 +300,13 @@ class BlackBoxService : LifecycleService() {
             val report = DiagnosticScanner().scan(BluetoothSppObdTransport(device))
             val useful = listOf(report.emissionsStatus, report.storedCodes, report.pendingCodes, report.permanentCodes)
                 .any { it.status == DiagnosticStatus.SUCCESS } || report.snapshot.values.any { it.status == DiagnosticStatus.SUCCESS }
+            val observedAt = maxOf(System.currentTimeMillis(), prefs.getLong("diagnostic_at", 0L) + 1L)
+            val reportJson = report.toJson()
             prefs.edit().putString("diagnostic_status", if (useful) "completata" else "nessuna risposta utile")
                 .putString("diagnostic_summary", report.summary())
-                .putString("diagnostic_report", report.toJson())
-                .putLong("diagnostic_at", System.currentTimeMillis()).apply()
+                .putString("diagnostic_report", reportJson)
+                .putLong("diagnostic_at", observedAt).apply()
+            DiagnosticReportSyncWorker.enqueue(this, observedAt, reportJson)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {

@@ -1159,6 +1159,40 @@ a {
 .ecu-raw { margin-top:14px; color:var(--ink); font-size:12px }
 .ecu-raw summary { cursor:pointer }
 .ecu-raw pre { max-height:360px; overflow:auto; padding:14px; background:var(--dark); color:#d6eee3; border-radius:6px; white-space:pre-wrap; overflow-wrap:anywhere }
+.diagnostics-toolbar { display:flex; align-items:center; gap:12px; margin:8px 0 18px; color:var(--muted); font-size:13px }
+.diagnostics-toolbar label { font-weight:700; color:var(--ink) }
+.diagnostics-toolbar .metric-selector { min-width:240px }
+.diagnostics-empty,.diagnostics-summary,.diagnostic-group { background:#fff; border:1px solid var(--line); border-radius:12px }
+.diagnostics-empty { padding:28px; max-width:760px }
+.diagnostics-empty h2 { margin:8px 0; font:700 20px Manrope,sans-serif }
+.diagnostics-empty p,.diagnostic-none { color:var(--muted); margin-bottom:0 }
+.diagnostics-summary { display:grid; grid-template-columns:minmax(0,1fr) minmax(240px,1fr) auto; align-items:center; gap:24px; padding:20px 24px; margin:14px 0 20px }
+.diagnostics-summary>div:first-child { display:flex; flex-direction:column; gap:5px }
+.diagnostics-summary>div:first-child strong { font:700 17px Manrope,sans-serif }
+.diagnostics-summary small { color:var(--muted); font-size:12px }
+.mil-indicator { display:flex; align-items:center; gap:12px }
+.mil-indicator>span:last-child { display:flex; flex-direction:column; gap:3px }
+.mil-indicator b { font-size:14px }
+.mil-lamp { width:14px; height:14px; border-radius:50%; background:#aab4af; box-shadow:0 0 0 4px #edf0ee }
+.mil-indicator.mil-on .mil-lamp { background:#e38831; box-shadow:0 0 0 4px #fff0df }
+.mil-indicator.mil-off .mil-lamp { background:#26886c; box-shadow:0 0 0 4px #e3f3ed }
+.dtc-total { display:flex; flex-direction:column; align-items:flex-end; gap:3px }
+.dtc-total strong { font:800 30px Manrope,sans-serif }
+.dtc-total span { color:var(--muted); font-size:12px }
+.diagnostics-groups { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px }
+.diagnostic-group { padding:16px; min-width:0 }
+.diagnostic-group .section-head { margin-bottom:12px }
+.diagnostic-group .section-head h2 { font-size:17px }
+.diagnostic-group ul { list-style:none; padding:0; margin:0 }
+.diagnostic-group li { display:grid; grid-template-columns:auto minmax(0,1fr); gap:8px 12px; padding:12px 0; border-top:1px solid var(--line); align-items:start }
+.diagnostic-group li>code { font-weight:800; color:var(--teal); font-size:14px }
+.diagnostic-group li>div { display:flex; min-width:0; flex-direction:column; gap:4px }
+.diagnostic-group li strong { font-size:12px; line-height:1.4 }
+.diagnostic-group li small { color:var(--muted); font-size:11px }
+.diagnostic-group li details { grid-column:2; color:var(--muted); font-size:11px }
+.diagnostic-group li details summary,.diagnostics-raw summary { cursor:pointer }
+.diagnostic-group li details code { display:block; overflow-wrap:anywhere; padding-top:5px }
+.diagnostics-raw { margin-top:18px }
 
 :root[data-theme='dark'] {
   color-scheme:dark;
@@ -1364,11 +1398,20 @@ a {
 .metric-panel-state { min-height:240px; display:grid; place-items:center; color:var(--muted); font-size:13px }
 .metric-panel-limit { color:#a06927; font-size:11px; margin:8px 0 0 }
 [data-theme='dark'] .metrics-toolbar,[data-theme='dark'] .metric-panel { background:#1e2b24; border-color:var(--line) }
+[data-theme='dark'] .diagnostics-empty,[data-theme='dark'] .diagnostics-summary,[data-theme='dark'] .diagnostic-group { background:#202c27; border-color:#3c4841 }
+[data-theme='dark'] .diagnostics-toolbar label,[data-theme='dark'] .diagnostic-group li strong,[data-theme='dark'] .mil-indicator b { color:var(--ink) }
 [data-theme='dark'] .metrics-toolbar select { background:#1e2b24; border-color:var(--line) }
 [data-theme='dark'] .metrics-time-choices { background:#17231c; border-color:var(--line) }
 [data-theme='dark'] .metrics-picks button { background:#294236; border-color:#486553; color:#dbf0e2 }
 @media(max-width:1200px) { .metrics-grid { grid-template-columns:1fr } }
 @media(max-width:640px) {
+  .diagnostics-toolbar { align-items:stretch; flex-wrap:wrap }
+  .diagnostics-toolbar label { flex:1 1 100% }
+  .diagnostics-toolbar .metric-selector { width:100%; min-width:0 }
+  .diagnostics-summary { grid-template-columns:1fr auto; gap:16px; padding:16px }
+  .diagnostics-summary>.mil-indicator { grid-column:1/-1; grid-row:2 }
+  .diagnostics-summary>.dtc-total { grid-column:2; grid-row:1 }
+  .diagnostics-groups { grid-template-columns:1fr }
   .metrics-toolbar { align-items:stretch }
   .metrics-toolbar label { flex:1 1 100% }
   .metrics-toolbar select,.metrics-toolbar .trip-selector { width:100%; max-width:none }

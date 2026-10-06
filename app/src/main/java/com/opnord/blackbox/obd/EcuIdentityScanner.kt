@@ -167,6 +167,13 @@ class EcuIdentityScanner(private val timeoutMs: Long = 6_000) {
             }.toMap()
         }
 
+        internal fun parseCanServicePayloads(raw: String, service: Int): Map<String, List<Int>> =
+            parseFrames(raw).mapNotNull { (ecu, chunks) ->
+                val payload = reassemble(chunks) ?: return@mapNotNull null
+                if (payload.firstOrNull() != service) return@mapNotNull null
+                ecu to payload.drop(1)
+            }.toMap()
+
         private fun hasIncompleteMultiFrame(raw: String): Boolean = parseFrames(raw).values.any { chunks ->
             chunks.firstOrNull()?.firstOrNull()?.let { it ushr 4 == 1 && reassemble(chunks) == null } == true
         }

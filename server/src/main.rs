@@ -166,6 +166,75 @@ struct EcuIdentityReportOut {
     report: Value,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DiagnosticsReportBody {
+    device_id: Uuid,
+    observed_at: DateTime<Utc>,
+    report: Value,
+}
+
+#[derive(Deserialize)]
+struct DiagnosticsReportsQuery {
+    limit: Option<i64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DtcOut {
+    code: String,
+    status: &'static str,
+    ecu: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiagnosticsReportOut {
+    device_id: Uuid,
+    observed_at: DateTime<Utc>,
+    received_at: DateTime<Utc>,
+    mil_on: Option<bool>,
+    dtc_count: usize,
+    stored: Vec<DtcOut>,
+    pending: Vec<DtcOut>,
+    permanent: Vec<DtcOut>,
+    report: Value,
+}
+
+#[derive(Serialize)]
+struct DiagnosticsReportsOut {
+    reports: Vec<DiagnosticsReportOut>,
+}
+
+fn report_dtcs(report: &Value, section: &'static str) -> Vec<DtcOut> {
+    report
+        .get(section)
+        .and_then(|value| value.get("value"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item.get("code").and_then(Value::as_str).map(|code| DtcOut {
+                code: code.to_owned(),
+                status: match section {
+                    "stored_codes" => "stored",
+                    "pending_codes" => "pending",
+                    _ => "permanent",
+                },
+                ecu: item.get("ecu").and_then(Value::as_str).map(str::to_owned),
+            })
+        })
+        .collect()
+}
+
+fn report_mil_on(report: &Value) -> Option<bool> {
+    report
+        .get("emissions_status")?
+        .get("value")?
+        .get("mil_on")?
+        .as_bool()
+}
+
 fn canonical(v: Value) -> Value {
     match v {
         Value::Array(xs) => Value::Array(xs.into_iter().map(canonical).collect()),
@@ -254,13 +323,12 @@ async fn ecu_identity_report(
     }
 
     let token_hash = Sha256::digest(token.as_bytes()).to_vec();
-    let row = sqlx::query(
-        "SELECT token_hash, token_revoked_at, vehicle_id FROM devices WHERE id=$1",
-    )
-    .bind(body.device_id)
-    .fetch_optional(&s.db)
-    .await
-    .map_err(db_err)?;
+    let row =
+        sqlx::query("SELECT token_hash, token_revoked_at, vehicle_id FROM devices WHERE id=$1")
+            .bind(body.device_id)
+            .fetch_optional(&s.db)
+            .await
+            .map_err(db_err)?;
     let Some(row) = row else {
         return Err(err(
             StatusCode::UNAUTHORIZED,
@@ -347,6 +415,140 @@ async fn vehicle_ecu_identity_report(
         report: row.try_get("report").map_err(db_err)?,
     })
     .into_response())
+}
+
+async fn diagnostics_report(
+    State(s): State<App>,
+    headers: HeaderMap,
+    Json(body): Json<DiagnosticsReportBody>,
+) -> Result<StatusCode> {
+    let token = bearer_token(&headers)?;
+    let report_bytes = serde_json::to_vec(&body.report).map_err(|_| {
+        err(
+            StatusCode::BAD_REQUEST,
+            "invalid_json",
+            "could not encode report",
+        )
+    })?;
+    if report_bytes.len() > 65_536 {
+        return Err(err(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "report_too_large",
+            "report must be no larger than 65536 bytes",
+        ));
+    }
+    if !body.report.is_object() {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "invalid_report",
+            "report must be a JSON object",
+        ));
+    }
+
+    let token_hash = Sha256::digest(token.as_bytes()).to_vec();
+    let row =
+        sqlx::query("SELECT token_hash, token_revoked_at, vehicle_id FROM devices WHERE id=$1")
+            .bind(body.device_id)
+            .fetch_optional(&s.db)
+            .await
+            .map_err(db_err)?;
+    let Some(row) = row else {
+        return Err(err(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "invalid device token",
+        ));
+    };
+    let stored_hash: Vec<u8> = row.try_get("token_hash").map_err(db_err)?;
+    let revoked_at: Option<DateTime<Utc>> = row.try_get("token_revoked_at").map_err(db_err)?;
+    let vehicle_id: Option<Uuid> = row.try_get("vehicle_id").map_err(db_err)?;
+    if revoked_at.is_some() || stored_hash != token_hash {
+        return Err(err(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "invalid device token",
+        ));
+    }
+    let Some(vehicle_id) = vehicle_id else {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "device_unassigned",
+            "device has no current vehicle",
+        ));
+    };
+    let assigned = sqlx::query(
+        "SELECT 1 FROM device_vehicle_assignments
+         WHERE device_id=$1 AND vehicle_id=$2 AND unassigned_at IS NULL",
+    )
+    .bind(body.device_id)
+    .bind(vehicle_id)
+    .fetch_optional(&s.db)
+    .await
+    .map_err(db_err)?;
+    if assigned.is_none() {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "assignment_missing",
+            "device has no matching active vehicle assignment",
+        ));
+    }
+
+    sqlx::query(
+        "INSERT INTO diagnostics_reports(device_id, vehicle_id, observed_at, report)
+         VALUES($1, $2, $3, $4) ON CONFLICT(device_id, observed_at) DO NOTHING",
+    )
+    .bind(body.device_id)
+    .bind(vehicle_id)
+    .bind(body.observed_at)
+    .bind(body.report)
+    .execute(&s.db)
+    .await
+    .map_err(db_err)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn vehicle_diagnostics_reports(
+    State(s): State<App>,
+    headers: HeaderMap,
+    Path(vehicle_id): Path<Uuid>,
+    Query(query): Query<DiagnosticsReportsQuery>,
+) -> Result<Json<DiagnosticsReportsOut>> {
+    dashboard(&s.db, &headers).await?;
+    let limit = query.limit.unwrap_or(20).clamp(1, 200);
+    let rows = sqlx::query(
+        "SELECT r.device_id, r.observed_at, r.received_at, r.report
+         FROM diagnostics_reports r
+         WHERE r.vehicle_id=$1
+         ORDER BY r.observed_at DESC, r.device_id
+         LIMIT $2",
+    )
+    .bind(vehicle_id)
+    .bind(limit)
+    .fetch_all(&s.db)
+    .await
+    .map_err(db_err)?;
+    let reports = rows
+        .into_iter()
+        .map(|row| -> Result<DiagnosticsReportOut> {
+            let report: Value = row.try_get("report").map_err(db_err)?;
+            let stored = report_dtcs(&report, "stored_codes");
+            let pending = report_dtcs(&report, "pending_codes");
+            let permanent = report_dtcs(&report, "permanent_codes");
+            let dtc_count = stored.len() + pending.len() + permanent.len();
+            Ok(DiagnosticsReportOut {
+                device_id: row.try_get("device_id").map_err(db_err)?,
+                observed_at: row.try_get("observed_at").map_err(db_err)?,
+                received_at: row.try_get("received_at").map_err(db_err)?,
+                mil_on: report_mil_on(&report),
+                dtc_count,
+                stored,
+                pending,
+                permanent,
+                report,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Json(DiagnosticsReportsOut { reports }))
 }
 
 async fn record_failed_device(
@@ -2189,6 +2391,10 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .route("/readyz", get(ready))
         .route("/api/v1/telemetry/batches", post(ingest))
         .route("/api/v1/devices/ecu-identity", post(ecu_identity_report))
+        .route(
+            "/api/v1/devices/diagnostics-report",
+            post(diagnostics_report),
+        )
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/session", get(auth_session))
         .route("/api/v1/auth/logout", post(logout))
@@ -2212,6 +2418,10 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .route(
             "/api/v1/vehicles/:vehicle_id/ecu-identity",
             get(vehicle_ecu_identity_report),
+        )
+        .route(
+            "/api/v1/vehicles/:vehicle_id/diagnostics-reports",
+            get(vehicle_diagnostics_reports),
         )
         .route("/api/v1/trips/:trip_id/gps", get(gps))
         .route("/api/v1/trips/:trip_id/events", get(trip_events))

@@ -69,6 +69,9 @@ export type VehicleStatus = { tripId: string | null; gps: GpsSample | null; metr
 export type EcuIdentityRead = { command: string; status: string; raw: string; values_by_ecu?: Record<string, string>; detail?: string | null }
 export type EcuIdentityReport = { summary?: string; adapter?: string | null; protocol_number?: string | null; protocol_name?: string | null; error?: string | null; reads?: EcuIdentityRead[] }
 export type VehicleEcuIdentity = { deviceId: string; observedAt: string; receivedAt: string; report: EcuIdentityReport }
+export type DiagnosticTroubleCode = { code: string; status?: string; raw?: string; ecu?: string; description?: string | null }
+export type DiagnosticReportPayload = { milOn?: boolean; stored?: DiagnosticTroubleCode[]; pending?: DiagnosticTroubleCode[]; permanent?: DiagnosticTroubleCode[]; codes?: DiagnosticTroubleCode[]; raw?: unknown; [key: string]: unknown }
+export type VehicleDiagnosticReport = { deviceId: string; observedAt: string; receivedAt: string; milOn?: boolean; dtcCount?: number; stored?: DiagnosticTroubleCode[]; pending?: DiagnosticTroubleCode[]; permanent?: DiagnosticTroubleCode[]; report: DiagnosticReportPayload }
 
 export class ApiError extends Error {
   constructor(message: string, readonly status?: number) {
@@ -169,6 +172,11 @@ export async function fetchVehicleEcuIdentity(vehicleId: string, signal?: AbortS
     if (error instanceof ApiError && error.status === 404) return null
     throw error
   }
+}
+
+export async function fetchVehicleDiagnosticReports(vehicleId: string, signal?: AbortSignal): Promise<VehicleDiagnosticReport[]> {
+  const result = await request<{ reports?: VehicleDiagnosticReport[] }>(`/api/v1/vehicles/${encodeURIComponent(vehicleId)}/diagnostics-reports`, { signal })
+  return Array.isArray(result.reports) ? result.reports : []
 }
 
 export async function createVehicle(input: VehicleInput): Promise<Vehicle> {

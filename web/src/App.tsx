@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react'
-import { ApiError, approvePendingDevice, fetchDevices, fetchPendingDevices, fetchSession, fetchTripEvents, fetchTripGps, createVehicle, updateVehicle, fetchTripMetricCatalog, fetchTripMetricSamples, fetchTripTelemetryAt, fetchTrips, fetchVehicles, fetchVehicleStatus, fetchVehicleEcuIdentity, GpsSample, login, logout, ManagedDevice, MetricDefinition, MetricSample, PendingDevice, rotateDeviceToken, Trip, TripEvent, Vehicle, VehicleEcuIdentity, VehicleStatus } from './api'
+import { ApiError, approvePendingDevice, fetchDevices, fetchPendingDevices, fetchSession, fetchTripEvents, fetchTripGps, createVehicle, updateVehicle, fetchTripMetricCatalog, fetchTripMetricSamples, fetchTripTelemetryAt, fetchTrips, fetchVehicles, fetchVehicleStatus, fetchVehicleEcuIdentity, fetchVehicleDiagnosticReports, GpsSample, login, logout, ManagedDevice, MetricDefinition, MetricSample, PendingDevice, rotateDeviceToken, Trip, TripEvent, Vehicle, VehicleEcuIdentity, VehicleStatus, VehicleDiagnosticReport } from './api'
 import Overview from './pages/Overview'
 import Journeys from './pages/Journeys'
 import Explore from './pages/Explore'
@@ -7,6 +7,7 @@ import MetricsDashboard from './pages/MetricsDashboard'
 import Fleet from './pages/Fleet'
 import Admin from './pages/Admin'
 import Settings from './pages/Settings'
+import Diagnostics from './pages/Diagnostics'
 import { formatDate, formatDistance, message, pages, pageFromHash, labels, glyphs, type Page, type NearbyReading } from './pages/format'
 
 export default function App() {
@@ -25,6 +26,10 @@ export default function App() {
   const [statusError, setStatusError] = useState('')
   const [ecuIdentity, setEcuIdentity] = useState<VehicleEcuIdentity | null>(null)
   const [ecuIdentityError, setEcuIdentityError] = useState('')
+  const [diagnosticReports, setDiagnosticReports] = useState<VehicleDiagnosticReport[]>([])
+  const [diagnosticSelected, setDiagnosticSelected] = useState(0)
+  const [diagnosticLoading, setDiagnosticLoading] = useState(false)
+  const [diagnosticError, setDiagnosticError] = useState('')
   const [pending, setPending] = useState<PendingDevice[]>([])
   const [vehicleEditing, setVehicleEditing] = useState<string | null>(null)
   const [vehicleForm, setVehicleForm] = useState({ displayName: '', make: '', model: '', modelYear: '' })
@@ -68,7 +73,7 @@ export default function App() {
   const displayStopEvent = hoverStopEvent || selectedStopEvent
   const totalDistance = trips.reduce((n, t) => n + (t.distanceGpsM ?? t.distanceObdM ?? 0), 0)
 
-  const clearSession = useCallback(() => { setSignedIn(''); setVehicles([]); setDevices([]); setVehicleStatus(null); setPending([]); setTrips([]); setTripId(''); setGps([]); setTripEvents([]); setCatalog([]); setMetrics([]); setSelectedPoint(null); setHoverPoint(null); setSelectedStopEvent(null); setHoverStopEvent(null); setNearby([]); setIssuedToken(null); setAdminPassword({}); setCustomToken({}); setAdminName({}); setTokenMode({}); setPassword('') }, [])
+  const clearSession = useCallback(() => { setSignedIn(''); setVehicles([]); setDevices([]); setVehicleStatus(null); setDiagnosticReports([]); setDiagnosticSelected(0); setPending([]); setTrips([]); setTripId(''); setGps([]); setTripEvents([]); setCatalog([]); setMetrics([]); setSelectedPoint(null); setHoverPoint(null); setSelectedStopEvent(null); setHoverStopEvent(null); setNearby([]); setIssuedToken(null); setAdminPassword({}); setCustomToken({}); setAdminName({}); setTokenMode({}); setPassword('') }, [])
   const handleError = useCallback((failure: unknown) => { if (failure instanceof ApiError && (failure.status === 401 || failure.status === 403)) clearSession(); else setError(message(failure)) }, [clearSession])
   const loadFleet = useCallback(async () => {
     setLoading(true); setError('')
@@ -94,6 +99,21 @@ export default function App() {
     const timer = window.setInterval(refresh, 30_000)
     return () => { window.clearInterval(timer); controller.abort() }
   }, [signedIn, selectedId, clearSession])
+  const loadDiagnostics = useCallback(async (signal?: AbortSignal) => {
+    if (!selectedId) { setDiagnosticReports([]); return }
+    setDiagnosticLoading(true); setDiagnosticError('')
+    try { const rows = await fetchVehicleDiagnosticReports(selectedId, signal); if (!signal?.aborted) { setDiagnosticReports(rows); setDiagnosticSelected(current => Math.min(current, Math.max(0, rows.length - 1))) } }
+    catch (failure) { if (!signal?.aborted) { if (failure instanceof ApiError && (failure.status === 401 || failure.status === 403)) clearSession(); else setDiagnosticError(message(failure)) } }
+    finally { if (!signal?.aborted) setDiagnosticLoading(false) }
+  }, [selectedId, clearSession])
+  useEffect(() => {
+    if (!signedIn || !selectedId || page !== 'diagnostics') { setDiagnosticReports([]); return }
+    setDiagnosticSelected(0)
+    const controller = new AbortController()
+    void loadDiagnostics(controller.signal)
+    const timer = window.setInterval(() => void loadDiagnostics(controller.signal), 30_000)
+    return () => { window.clearInterval(timer); controller.abort() }
+  }, [signedIn, selectedId, page, loadDiagnostics])
   useEffect(() => {
     if (!signedIn || !selectedId) { setEcuIdentity(null); return }
     const controller = new AbortController()
@@ -171,11 +191,11 @@ export default function App() {
 </a>
 <div className="nav-caption">WORKSPACE</div>
 <nav aria-label="Navigazione principale">
-{pages.slice(0, 5).map(nav)}
+{pages.slice(0, 6).map(nav)}
 </nav>
 <div className="nav-caption nav-caption-lower">SISTEMA</div>
 <nav aria-label="Gestione">
-{pages.slice(5).map(nav)}
+{pages.slice(6).map(nav)}
 </nav>
 <div className="sidebar-bottom">
 <span className="live-dot" /> TELEMETRIA PRIVATA</div>
@@ -234,6 +254,7 @@ export default function App() {
         {page === 'journeys' && <Journeys selectedVehicle={selectedVehicle} trips={trips} detailLoading={detailLoading} openTrip={openTrip} />}
         {page === 'explore' && <Explore tripId={tripId} detailError={detailError} onRefresh={() => setRefreshTick(value => value + 1)} gps={gps} events={tripEvents} displayPoint={displayPoint} setHoverPoint={setHoverPoint} setSelectedPoint={setSelectedPoint} displayStopEvent={displayStopEvent} setHoverStopEvent={setHoverStopEvent} setSelectedStopEvent={setSelectedStopEvent} nearby={nearby} nearbyLoading={nearbyLoading} catalog={catalog} metricName={metricName} setMetricName={setMetricName} metrics={metrics} selectedMetric={selectedMetric} />}
         {page === 'metrics' && <MetricsDashboard vehicle={selectedVehicle} trips={trips} tripId={tripId} setTripId={setTripId} selectedTrip={selectedTrip} catalog={catalog} detailLoading={detailLoading} detailError={detailError} onRefresh={() => setRefreshTick(value => value + 1)} now={now} />}
+        {page === 'diagnostics' && <Diagnostics vehicle={selectedVehicle} reports={diagnosticReports} selected={diagnosticSelected} setSelected={setDiagnosticSelected} loading={diagnosticLoading} error={diagnosticError} refresh={() => void loadDiagnostics()} />}
         {page === 'fleet' && <Fleet vehicles={vehicles} devices={devices} selectedId={selectedId} selectedVehicle={selectedVehicle} selectedDevice={selectedDevice} deviceFresh={deviceFresh} vehicleStatus={vehicleStatus} statusError={statusError} ecuIdentity={ecuIdentity} ecuIdentityError={ecuIdentityError} vehicleMessage={vehicleMessage} vehicleEditing={vehicleEditing} vehicleForm={vehicleForm} setVehicleForm={setVehicleForm} vehicleBusy={vehicleBusy} saveVehicle={saveVehicle} editVehicle={editVehicle} setVehicleEditing={setVehicleEditing} selectVehicle={selectVehicle} openTrip={openTrip} now={now} />}
         {page === 'admin' && <Admin vehicles={vehicles} devices={devices} pending={pending} adminMessage={adminMessage} adminVehicle={adminVehicle} setAdminVehicle={setAdminVehicle} adminName={adminName} setAdminName={setAdminName} adminPassword={adminPassword} setAdminPassword={setAdminPassword} adminBusy={adminBusy} tokenMode={tokenMode} setTokenMode={setTokenMode} customToken={customToken} setCustomToken={setCustomToken} issuedToken={issuedToken} approve={approve} rotate={rotate} loadFleet={loadFleet} />}
         {page === 'settings' && <Settings theme={theme} setTheme={setTheme} signedIn={signedIn} updatedAt={updatedAt} />}

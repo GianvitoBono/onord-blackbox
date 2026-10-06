@@ -15,10 +15,10 @@ const tripReasons: Record<string, string> = {
   recovery_timeout: 'sosta prolungata dopo riavvio',
 }
 export const tripReason = (reason?: string | null) => reason ? tripReasons[reason] || reason.replaceAll('_', ' ') : '—'
-export const pages = ['overview', 'journeys', 'explore', 'metrics', 'fleet', 'admin', 'settings'] as const
+export const pages = ['overview', 'journeys', 'explore', 'metrics', 'diagnostics', 'fleet', 'admin', 'settings'] as const
 export type Page = typeof pages[number]
-export const labels: Record<Page, string> = { overview: 'Panoramica', journeys: 'Viaggi', explore: 'Esplora', metrics: 'Metriche', fleet: 'Flotta', admin: 'Admin', settings: 'Impostazioni' }
-export const glyphs: Record<Page, string> = { overview: '◫', journeys: '↝', explore: '◎', metrics: '▥', fleet: '▤', admin: '◇', settings: '⚙' }
+export const labels: Record<Page, string> = { overview: 'Panoramica', journeys: 'Viaggi', explore: 'Esplora', metrics: 'Metriche', diagnostics: 'Diagnostica', fleet: 'Flotta', admin: 'Admin', settings: 'Impostazioni' }
+export const glyphs: Record<Page, string> = { overview: '◫', journeys: '↝', explore: '◎', metrics: '▥', diagnostics: '⚠', fleet: '▤', admin: '◇', settings: '⚙' }
 export function pageFromHash(): Page { const value = location.hash.slice(1); return pages.includes(value as Page) ? value as Page : 'overview' }
 export function metricLabel(metric: MetricDefinition) { return metric.description || metric.name.replace(/^obd\.pid\./, 'PID ').replaceAll('.', ' · ').replaceAll('_', ' ') }
 export function nearestGps(samples: GpsSample[], at: string) {

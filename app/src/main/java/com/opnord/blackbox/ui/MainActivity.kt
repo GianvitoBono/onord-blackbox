@@ -25,6 +25,7 @@ import com.opnord.blackbox.service.BlackBoxService
 import com.opnord.blackbox.storage.BlackBoxDatabase
 import com.opnord.blackbox.sync.SyncConfigurationStore
 import com.opnord.blackbox.sync.EcuIdentitySyncWorker
+import com.opnord.blackbox.sync.DiagnosticReportSyncWorker
 import com.opnord.blackbox.sync.TelemetrySyncWorker
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
@@ -103,6 +104,7 @@ class MainActivity : ComponentActivity() {
         }
         setContentView(scrollView)
         EcuIdentitySyncWorker.scheduleOnce(this)
+        DiagnosticReportSyncWorker.scheduleOnce(this)
         val db = BlackBoxDatabase.get(this)
         lifecycleScope.launch {
             combine(db.trips().countFlow(), db.samples().countFlow(), db.samples().unsyncedCountFlow()) { trips, samples, pending -> Triple(trips, samples, pending) }
@@ -149,6 +151,7 @@ class MainActivity : ComponentActivity() {
         val diagnosticStatus = diagnostics.getString("diagnostic_status", null)
         val diagnosticSummary = diagnostics.getString("diagnostic_summary", null)
         val diagnosticAt = diagnostics.getLong("diagnostic_at", 0L)
+        val diagnosticSyncStatus = diagnostics.getString("diagnostic_sync_status", null)
         val ecuStatus = diagnostics.getString("ecu_identity_status", null)
         val ecuSummary = diagnostics.getString("ecu_identity_summary", null)
         val ecuAt = diagnostics.getLong("ecu_identity_at", 0L)
@@ -161,6 +164,7 @@ class MainActivity : ComponentActivity() {
             (if (lastObd > 0) "Ultimi valori OBD: ${diagnostics.getInt("obd_last_values", 0)} · ${DateFormat.format("dd/MM HH:mm:ss", lastObd)}\n" else "") +
             (if (diagnosticStatus != null) "Scansione OBD: $diagnosticStatus${if (diagnosticAt > 0) " · ${DateFormat.format("dd/MM HH:mm", diagnosticAt)}" else ""}\n" else "") +
             (if (diagnosticSummary != null) "$diagnosticSummary\n" else "") +
+            (if (diagnosticSyncStatus != null) "Invio diagnosi: $diagnosticSyncStatus\n" else "") +
             (if (ecuStatus != null) "Identificazione ECU: $ecuStatus${if (ecuAt > 0) " · ${DateFormat.format("dd/MM HH:mm", ecuAt)}" else ""}\n" else "") +
             (if (ecuSummary != null) "$ecuSummary\n" else "") +
             (if (ecuSyncStatus != null) "Invio ECU: $ecuSyncStatus\n" else "") +
@@ -193,6 +197,7 @@ class MainActivity : ComponentActivity() {
         TelemetrySyncWorker.schedule(this)
         TelemetrySyncWorker.retryNow(this)
         EcuIdentitySyncWorker.scheduleOnce(this)
+        DiagnosticReportSyncWorker.scheduleOnce(this)
         info.text = "Configurazione salvata. I batch locali useranno l'ID attuale; sincronizzazione avviata su Wi-Fi.\n" +
             "Viaggi salvati: $tripCount\nCampioni locali: $sampleCount\nIn attesa di sincronizzazione: $pendingCount"
     }
