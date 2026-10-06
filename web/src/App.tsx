@@ -1,5 +1,6 @@
-import { FormEvent, useCallback, useEffect, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { ApiError, approvePendingDevice, fetchDevices, fetchPendingDevices, fetchSession, fetchTripEvents, fetchTripGps, createVehicle, updateVehicle, fetchTripMetricCatalog, fetchTripMetricSamples, fetchTripTelemetryAt, fetchTrips, fetchVehicles, fetchVehicleStatus, fetchVehicleEcuIdentity, fetchVehicleDiagnosticReports, GpsSample, login, logout, ManagedDevice, MetricDefinition, MetricSample, PendingDevice, rotateDeviceToken, Trip, TripEvent, Vehicle, VehicleEcuIdentity, VehicleStatus, VehicleDiagnosticReport } from './api'
+import { inferStops } from './pages/inferStops'
 import Overview from './pages/Overview'
 import Journeys from './pages/Journeys'
 import Explore from './pages/Explore'
@@ -71,6 +72,7 @@ export default function App() {
   const selectedMetric = catalog.find(m => m.name === metricName)
   const displayPoint = hoverPoint || selectedPoint
   const displayStopEvent = hoverStopEvent || selectedStopEvent
+  const visibleStopEvents = useMemo(() => tripEvents.length ? tripEvents : inferStops(gps), [tripEvents, gps])
   const totalDistance = trips.reduce((n, t) => n + (t.distanceGpsM ?? t.distanceObdM ?? 0), 0)
 
   const clearSession = useCallback(() => { setSignedIn(''); setVehicles([]); setDevices([]); setVehicleStatus(null); setDiagnosticReports([]); setDiagnosticSelected(0); setPending([]); setTrips([]); setTripId(''); setGps([]); setTripEvents([]); setCatalog([]); setMetrics([]); setSelectedPoint(null); setHoverPoint(null); setSelectedStopEvent(null); setHoverStopEvent(null); setNearby([]); setIssuedToken(null); setAdminPassword({}); setCustomToken({}); setAdminName({}); setTokenMode({}); setPassword('') }, [])
@@ -252,7 +254,7 @@ export default function App() {
 </div>}
         {page === 'overview' && <Overview selectedVehicle={selectedVehicle} trips={trips} totalDistance={totalDistance} detailLoading={detailLoading} deviceFresh={deviceFresh} updatedAt={updatedAt} loading={loading} loadFleet={refreshAll} openTrip={openTrip} />}
         {page === 'journeys' && <Journeys selectedVehicle={selectedVehicle} trips={trips} detailLoading={detailLoading} openTrip={openTrip} />}
-        {page === 'explore' && <Explore tripId={tripId} detailError={detailError} onRefresh={() => setRefreshTick(value => value + 1)} gps={gps} events={tripEvents} displayPoint={displayPoint} setHoverPoint={setHoverPoint} setSelectedPoint={setSelectedPoint} displayStopEvent={displayStopEvent} setHoverStopEvent={setHoverStopEvent} setSelectedStopEvent={setSelectedStopEvent} nearby={nearby} nearbyLoading={nearbyLoading} catalog={catalog} metricName={metricName} setMetricName={setMetricName} metrics={metrics} selectedMetric={selectedMetric} />}
+        {page === 'explore' && <Explore tripId={tripId} detailError={detailError} onRefresh={() => setRefreshTick(value => value + 1)} gps={gps} events={visibleStopEvents} displayPoint={displayPoint} setHoverPoint={setHoverPoint} setSelectedPoint={setSelectedPoint} displayStopEvent={displayStopEvent} setHoverStopEvent={setHoverStopEvent} setSelectedStopEvent={setSelectedStopEvent} nearby={nearby} nearbyLoading={nearbyLoading} catalog={catalog} metricName={metricName} setMetricName={setMetricName} metrics={metrics} selectedMetric={selectedMetric} />}
         {page === 'metrics' && <MetricsDashboard vehicle={selectedVehicle} trips={trips} tripId={tripId} setTripId={setTripId} selectedTrip={selectedTrip} catalog={catalog} detailLoading={detailLoading} detailError={detailError} onRefresh={() => setRefreshTick(value => value + 1)} now={now} />}
         {page === 'diagnostics' && <Diagnostics vehicle={selectedVehicle} reports={diagnosticReports} selected={diagnosticSelected} setSelected={setDiagnosticSelected} loading={diagnosticLoading} error={diagnosticError} refresh={() => void loadDiagnostics()} />}
         {page === 'fleet' && <Fleet vehicles={vehicles} devices={devices} selectedId={selectedId} selectedVehicle={selectedVehicle} selectedDevice={selectedDevice} deviceFresh={deviceFresh} vehicleStatus={vehicleStatus} statusError={statusError} ecuIdentity={ecuIdentity} ecuIdentityError={ecuIdentityError} vehicleMessage={vehicleMessage} vehicleEditing={vehicleEditing} vehicleForm={vehicleForm} setVehicleForm={setVehicleForm} vehicleBusy={vehicleBusy} saveVehicle={saveVehicle} editVehicle={editVehicle} setVehicleEditing={setVehicleEditing} selectVehicle={selectVehicle} openTrip={openTrip} now={now} />}

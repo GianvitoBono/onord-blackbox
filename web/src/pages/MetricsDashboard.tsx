@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
-import { fetchTripMetricSamples, type MetricDefinition, type MetricSample, type Trip, type Vehicle } from '../api'
+import { fetchTripMetricSamples, fetchTripRawObd, type MetricDefinition, type MetricSample, type RawObdReply, type Trip, type Vehicle } from '../api'
 import TelemetryChart from '../components/TelemetryChart'
 import { formatDate, formatDistance, message } from './format'
 import { groupOrder, guideFor, isEncoded, metricSource } from './metricGuide'
@@ -99,6 +99,7 @@ export default function MetricsDashboard({ vehicle, trips, tripId, setTripId, se
   const [catalogOpen, setCatalogOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [exportStatus, setExportStatus] = useState('')
+  const [rawExportStatus, setRawExportStatus] = useState('')
   const [windowChoice, setWindowChoice] = useState<WindowChoice>('15m')
   const [custom, setCustom] = useState<[number, number] | null>(null)
   const [cursor, setCursor] = useState<string | null>(null)
@@ -157,6 +158,28 @@ export default function MetricsDashboard({ vehicle, trips, tripId, setTripId, se
       setExportStatus(`Copiati ${series.reduce((sum, item) => sum + item.samples.length, 0)} campioni. Incolla qui il JSON.`)
     } catch (error) { setExportStatus(message(error)) }
   }
+  async function downloadRawReplies() {
+    if (!tripId) return
+    setRawExportStatus('Raccolta risposte OBD…')
+    try {
+      const replies: RawObdReply[] = []
+      while (replies.length < 5000) {
+        const page = await fetchTripRawObd(tripId, replies[replies.length - 1])
+        replies.push(...page)
+        if (page.length < 500) break
+      }
+      if (!replies.length) { setRawExportStatus('Nessuna risposta completa disponibile per questo viaggio. Serve la nuova versione di app e backend.'); return }
+      const blob = new Blob([JSON.stringify({ tripId, exportedAt: new Date().toISOString(),
+        truncated: replies.length >= 5000, replies }, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `obd-raw-${tripId}.json`
+      link.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      setRawExportStatus(`${replies.length} risposte scaricate${replies.length >= 5000 ? ' (limite raggiunto)' : ''}.`)
+    } catch (error) { setRawExportStatus(message(error)) }
+  }
   return <section className="metrics-dashboard">
     <div className="page-heading metrics-heading">
       <div><h1>Analisi telemetria</h1><p>{vehicle?.displayName || 'Mezzo'} · dati del viaggio, letti per sistema dell’auto</p></div>
@@ -192,7 +215,18 @@ export default function MetricsDashboard({ vehicle, trips, tripId, setTripId, se
           })}</div></div> : null
         })}</div>
         {!matching.length && <p className="metrics-catalog-empty">Nessun altro segnale misurabile corrisponde alla ricerca.</p>}
-        {encoded.length > 0 && <details className="metrics-encoded"><summary>{encoded.length} PID codificati · dati tecnici</summary><p>Un intero grezzo può contenere più campi o flag. I campi con formula verificata compaiono sopra come segnali separati; gli altri restano fuori dai grafici.</p><ul>{encoded.map(metric => <li key={metric.name}><span>{guideFor(metric).title}</span><code>{metric.name}</code></li>)}</ul><div className="metrics-encoded-actions"><button type="button" onClick={() => void copyEncodedSamples()} disabled={!range || Boolean(exportStatus.startsWith('Raccolta'))}>Copia campioni storici</button><a href="#fleet">Vedi valori grezzi nella Flotta</a></div>{exportStatus && <p role="status">{exportStatus}</p>}<p>Per gli altri PID servono i byte originali: nell’app Android usa “Acquisisci risposte OBD grezze”.</p></details>}
+        <details className="metrics-encoded"><summary>Risposte OBD originali · {encoded.length} PID codificati</summary>
+          <p>La nuova versione conserva i byte di ogni risposta, anche quando il valore è già decodificato.</p>
+          {encoded.length > 0 && <><p>Un intero grezzo può contenere più campi o flag. I campi con formula verificata compaiono sopra come segnali separati.</p>
+            <ul>{encoded.map(metric => <li key={metric.name}><span>{guideFor(metric).title}</span><code>{metric.name}</code></li>)}</ul></>}
+          <div className="metrics-encoded-actions">
+            {encoded.length > 0 && <button type="button" onClick={() => void copyEncodedSamples()} disabled={!range || exportStatus.startsWith('Raccolta')}>Copia campioni storici</button>}
+            <button type="button" onClick={() => void downloadRawReplies()} disabled={rawExportStatus.startsWith('Raccolta')}>Scarica ultime 5.000 risposte OBD</button>
+            <a href="#fleet">Vedi valori grezzi nella Flotta</a>
+          </div>
+          {exportStatus && <p role="status">{exportStatus}</p>}{rawExportStatus && <p role="status">{rawExportStatus}</p>}
+          <p>Il download contiene byte, testo ELM, ECU e stato di parsing raccolti dalla nuova versione dell’app. I viaggi precedenti conservano solo gli interi.</p>
+        </details>
       </section>}
       <div className="metrics-active-bar"><strong>{shown.length} {shown.length === 1 ? 'grafico attivo' : 'grafici attivi'}</strong><span>Significato, unità e origine accanto a ogni traccia</span></div>
       {shown.length && range ? <div className="metrics-grid">{shown.map((metric, index) => <MetricPanel key={`${metric.name}:${range.from}:${range.to}`} tripId={tripId} metric={metric} from={range.from} to={range.to} cursor={cursor} onHover={setCursor} onZoom={(from, to) => { setCustom([from, to]); setCursor(null) }} onRemove={() => removeMetric(metric.name)} featured={index === 0} historical={isHistoricalMetric(metric.name) && !catalog.some(item => item.name === metric.name)} />)}</div> : <div className="empty-message">Scegli una vista o aggiungi un segnale dal catalogo.</div>}

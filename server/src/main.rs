@@ -77,6 +77,9 @@ struct Batch {
     device_samples: Vec<DeviceSample>,
     #[serde(default)]
     trip_events: Vec<TripEvent>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    raw_obd_replies: Vec<RawObdReply>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -135,6 +138,20 @@ struct TripEvent {
     latitude: f64,
     longitude: f64,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawObdReply {
+    reply_id: Uuid,
+    trip_id: Uuid,
+    observed_at: DateTime<Utc>,
+    mode: i16,
+    pid: Option<i16>,
+    command: String,
+    ecu_id: Option<String>,
+    response_bytes: Vec<u8>,
+    raw_response: String,
+    parse_status: String,
+}
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Ack {
@@ -145,6 +162,8 @@ struct Ack {
     device_accepted: i32,
     #[serde(default)]
     events_accepted: i32,
+    #[serde(default)]
+    raw_obd_accepted: i32,
     received_at: DateTime<Utc>,
     schema_version: u32,
 }
@@ -737,21 +756,23 @@ async fn ingest(
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
-    if let Some(row)=sqlx::query("SELECT payload_sha256,gps_count,obd_count,device_count,event_count,accepted_at FROM ingest_batches WHERE device_id=$1 AND batch_id=$2").bind(batch.device_id).bind(batch.batch_id).fetch_optional(&mut *tx).await.map_err(db_err)? {
+    if let Some(row)=sqlx::query("SELECT payload_sha256,gps_count,obd_count,device_count,event_count,raw_obd_count,accepted_at FROM ingest_batches WHERE device_id=$1 AND batch_id=$2").bind(batch.device_id).bind(batch.batch_id).fetch_optional(&mut *tx).await.map_err(db_err)? {
   let prior:Vec<u8>=row.try_get("payload_sha256").map_err(db_err)?;
   if prior!=payload_hash { return Err(err(StatusCode::CONFLICT,"batch_id_conflict","batchId was already accepted with a different payload")); }
-  let ack=Ack{batch_id:batch.batch_id,accepted:true,gps_accepted:row.try_get("gps_count").map_err(db_err)?,obd_accepted:row.try_get("obd_count").map_err(db_err)?,device_accepted:row.try_get("device_count").map_err(db_err)?,events_accepted:row.try_get("event_count").map_err(db_err)?,received_at:row.try_get("accepted_at").map_err(db_err)?,schema_version:1};
+  let ack=Ack{batch_id:batch.batch_id,accepted:true,gps_accepted:row.try_get("gps_count").map_err(db_err)?,obd_accepted:row.try_get("obd_count").map_err(db_err)?,device_accepted:row.try_get("device_count").map_err(db_err)?,events_accepted:row.try_get("event_count").map_err(db_err)?,raw_obd_accepted:row.try_get("raw_obd_count").map_err(db_err)?,received_at:row.try_get("accepted_at").map_err(db_err)?,schema_version:1};
   tx.commit().await.map_err(db_err)?; return Ok(Json(ack));
  }
     let n = batch.gps_samples.len()
         + batch.obd_samples.len()
         + batch.device_samples.len()
-        + batch.trip_events.len();
+        + batch.trip_events.len()
+        + batch.raw_obd_replies.len();
     if n > 10_000
         || batch.gps_samples.len() > 10_000
         || batch.obd_samples.len() > 10_000
         || batch.device_samples.len() > 10_000
         || batch.trip_events.len() > 10_000
+        || batch.raw_obd_replies.len() > 10_000
     {
         return Err(err(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -767,6 +788,7 @@ async fn ingest(
         .chain(batch.obd_samples.iter().map(|x| x.sample_id))
         .chain(batch.device_samples.iter().map(|x| x.sample_id))
         .chain(batch.trip_events.iter().map(|x| x.event_id))
+        .chain(batch.raw_obd_replies.iter().map(|x| x.reply_id))
         .all(|id| sample_ids.insert(id));
     if !unique {
         return Err(err(
@@ -852,6 +874,19 @@ async fn ingest(
                 "invalid_trip_event",
                 "invalid trip event kind, coordinates, or timestamp",
             ));
+        }
+    }
+    for reply in &batch.raw_obd_replies {
+        if reply.trip_id != batch.trip.id || !(0..=255).contains(&reply.mode)
+            || reply.pid.is_some_and(|pid| !(0..=255).contains(&pid))
+            || reply.command.is_empty() || reply.command.len() > 32
+            || !reply.command.bytes().all(|c| c.is_ascii_alphanumeric())
+            || reply.ecu_id.as_ref().is_some_and(|ecu| ecu.is_empty() || ecu.len() > 16)
+            || reply.response_bytes.len() > 2048 || reply.raw_response.len() > 4096
+            || !matches!(reply.parse_status.as_str(), "complete" | "captured" | "unsupported" | "malformed" | "adapter_error" | "timeout" | "error")
+            || reply.observed_at < batch.trip.started_at
+        {
+            return Err(err(StatusCode::BAD_REQUEST, "invalid_raw_obd_reply", "invalid raw OBD reply metadata or size"));
         }
     }
     let assignment=sqlx::query("SELECT 1 FROM device_vehicle_assignments WHERE device_id=$1 AND vehicle_id=$2 AND unassigned_at IS NULL").bind(batch.device_id).bind(vehicle_id).fetch_optional(&mut *tx).await.map_err(db_err)?;
@@ -1028,6 +1063,16 @@ async fn ingest(
             }
         }
     }
+    for reply in &batch.raw_obd_replies {
+        let inserted = sqlx::query("INSERT INTO obd_raw_replies(device_id,observed_at,reply_id,trip_id,mode,pid,command,ecu_id,response_bytes,raw_response,parse_status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING")
+            .bind(batch.device_id).bind(reply.observed_at).bind(reply.reply_id).bind(batch.trip.id)
+            .bind(reply.mode).bind(reply.pid).bind(&reply.command).bind(&reply.ecu_id)
+            .bind(&reply.response_bytes).bind(&reply.raw_response).bind(&reply.parse_status)
+            .execute(&mut *tx).await.map_err(db_err)?;
+        if inserted.rows_affected() != 1 {
+            return Err(err(StatusCode::CONFLICT, "raw_reply_conflict", "replyId was already accepted in another batch"));
+        }
+    }
     for event in &batch.trip_events {
         let inserted = sqlx::query("INSERT INTO trip_events(event_id,trip_id,stop_id,kind,observed_at,latitude,longitude) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING")
             .bind(event.event_id).bind(batch.trip.id).bind(event.stop_id).bind(&event.kind).bind(event.observed_at).bind(event.latitude).bind(event.longitude)
@@ -1052,7 +1097,7 @@ async fn ingest(
             }
         }
     }
-    let row=sqlx::query("INSERT INTO ingest_batches(device_id,batch_id,payload_sha256,gps_count,obd_count,device_count,event_count) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(device_id,batch_id) DO NOTHING RETURNING accepted_at").bind(batch.device_id).bind(batch.batch_id).bind(&payload_hash).bind(batch.gps_samples.len() as i32).bind(batch.obd_samples.len() as i32).bind(batch.device_samples.len() as i32).bind(batch.trip_events.len() as i32).fetch_optional(&mut *tx).await.map_err(db_err)?;
+    let row=sqlx::query("INSERT INTO ingest_batches(device_id,batch_id,payload_sha256,gps_count,obd_count,device_count,event_count,raw_obd_count) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(device_id,batch_id) DO NOTHING RETURNING accepted_at").bind(batch.device_id).bind(batch.batch_id).bind(&payload_hash).bind(batch.gps_samples.len() as i32).bind(batch.obd_samples.len() as i32).bind(batch.device_samples.len() as i32).bind(batch.trip_events.len() as i32).bind(batch.raw_obd_replies.len() as i32).fetch_optional(&mut *tx).await.map_err(db_err)?;
     let ack = if let Some(row) = row {
         Ack {
             batch_id: batch.batch_id,
@@ -1061,11 +1106,12 @@ async fn ingest(
             obd_accepted: batch.obd_samples.len() as i32,
             device_accepted: batch.device_samples.len() as i32,
             events_accepted: batch.trip_events.len() as i32,
+            raw_obd_accepted: batch.raw_obd_replies.len() as i32,
             received_at: row.try_get("accepted_at").map_err(db_err)?,
             schema_version: 1,
         }
     } else {
-        let r=sqlx::query("SELECT payload_sha256,gps_count,obd_count,device_count,event_count,accepted_at FROM ingest_batches WHERE device_id=$1 AND batch_id=$2").bind(batch.device_id).bind(batch.batch_id).fetch_one(&mut *tx).await.map_err(db_err)?;
+        let r=sqlx::query("SELECT payload_sha256,gps_count,obd_count,device_count,event_count,raw_obd_count,accepted_at FROM ingest_batches WHERE device_id=$1 AND batch_id=$2").bind(batch.device_id).bind(batch.batch_id).fetch_one(&mut *tx).await.map_err(db_err)?;
         let h: Vec<u8> = r.try_get("payload_sha256").map_err(db_err)?;
         if h != payload_hash {
             return Err(err(
@@ -1081,6 +1127,7 @@ async fn ingest(
             obd_accepted: r.try_get("obd_count").map_err(db_err)?,
             device_accepted: r.try_get("device_count").map_err(db_err)?,
             events_accepted: r.try_get("event_count").map_err(db_err)?,
+            raw_obd_accepted: r.try_get("raw_obd_count").map_err(db_err)?,
             received_at: r.try_get("accepted_at").map_err(db_err)?,
             schema_version: 1,
         }
@@ -1983,6 +2030,64 @@ async fn trip_events(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct RawObdParams {
+    limit: Option<i64>,
+    before_at: Option<DateTime<Utc>>,
+    before_reply_id: Option<Uuid>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RawObdOut {
+    reply_id: Uuid,
+    observed_at: DateTime<Utc>,
+    mode: i16,
+    pid: Option<i16>,
+    command: String,
+    ecu_id: Option<String>,
+    response_hex: String,
+    raw_response: String,
+    parse_status: String,
+}
+
+async fn trip_raw_obd(
+    State(s): State<App>,
+    headers: HeaderMap,
+    Path(trip): Path<Uuid>,
+    Query(params): Query<RawObdParams>,
+) -> Result<Json<Vec<RawObdOut>>> {
+    dashboard(&s.db, &headers).await?;
+    let limit = params.limit.unwrap_or(500).clamp(1, 500);
+    if params.before_at.is_some() != params.before_reply_id.is_some() {
+        return Err(err(StatusCode::BAD_REQUEST, "invalid_cursor", "beforeAt and beforeReplyId must be supplied together"));
+    }
+    let rows = sqlx::query(
+        "SELECT reply_id,observed_at,mode,pid,command,ecu_id,encode(response_bytes,'hex') AS response_hex,raw_response,parse_status
+         FROM obd_raw_replies WHERE trip_id=$1
+           AND ($2::timestamptz IS NULL OR (observed_at,reply_id)<($2,$3))
+         ORDER BY observed_at DESC,reply_id DESC LIMIT $4",
+    )
+    .bind(trip).bind(params.before_at).bind(params.before_reply_id).bind(limit)
+    .fetch_all(&s.db).await.map_err(db_err)?;
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        out.push(RawObdOut {
+            reply_id: row.try_get("reply_id").map_err(db_err)?,
+            observed_at: row.try_get("observed_at").map_err(db_err)?,
+            mode: row.try_get("mode").map_err(db_err)?,
+            pid: row.try_get("pid").map_err(db_err)?,
+            command: row.try_get("command").map_err(db_err)?,
+            ecu_id: row.try_get("ecu_id").map_err(db_err)?,
+            response_hex: row.try_get("response_hex").map_err(db_err)?,
+            raw_response: row.try_get("raw_response").map_err(db_err)?,
+            parse_status: row.try_get("parse_status").map_err(db_err)?,
+        });
+    }
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct MetricParams {
     name: String,
     from: DateTime<Utc>,
@@ -2425,6 +2530,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         )
         .route("/api/v1/trips/:trip_id/gps", get(gps))
         .route("/api/v1/trips/:trip_id/events", get(trip_events))
+        .route("/api/v1/trips/:trip_id/obd-raw", get(trip_raw_obd))
         .route("/api/v1/trips/:trip_id/metrics", get(metrics))
         .route("/api/v1/trips/:trip_id/telemetry-at", get(telemetry_at))
         .route("/api/v1/trips/:trip_id/metric-catalog", get(metric_catalog))

@@ -57,6 +57,8 @@ CREATE TABLE ingest_batches (
     gps_count integer NOT NULL,
     obd_count integer NOT NULL,
     device_count integer NOT NULL,
+    event_count integer NOT NULL DEFAULT 0,
+    raw_obd_count integer NOT NULL DEFAULT 0,
     PRIMARY KEY (device_id, batch_id)
 );
 
@@ -89,6 +91,17 @@ CREATE TABLE obd_measurements (
 );
 SELECT create_hypertable('obd_measurements', by_range('observed_at'), if_not_exists => TRUE);
 CREATE INDEX obd_trip_pid_time_idx ON obd_measurements (trip_id, pid, observed_at DESC);
+-- Complete ELM response capture, including unclassified/malformed replies and ISO-TP bytes.
+CREATE TABLE obd_raw_replies (
+ device_id uuid NOT NULL REFERENCES devices(id), observed_at timestamptz NOT NULL,
+ reply_id uuid NOT NULL, trip_id uuid NOT NULL REFERENCES trips(id),
+ mode smallint NOT NULL, pid smallint, command text NOT NULL, ecu_id text,
+ response_bytes bytea NOT NULL, raw_response text NOT NULL, parse_status text NOT NULL,
+ received_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY (device_id, observed_at, reply_id)
+);
+SELECT create_hypertable('obd_raw_replies', by_range('observed_at'), if_not_exists => TRUE);
+CREATE INDEX obd_raw_trip_time_idx ON obd_raw_replies (trip_id, observed_at DESC);
 
 CREATE TABLE device_samples (
     device_id uuid NOT NULL REFERENCES devices(id),

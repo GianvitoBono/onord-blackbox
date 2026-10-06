@@ -51,6 +51,7 @@ data class PendingSyncBatchEntity(
     val payload: String,
     val sampleIds: String,
     @androidx.room.ColumnInfo(defaultValue = "''") val eventIds: String = "",
+    @androidx.room.ColumnInfo(defaultValue = "''") val rawReplyIds: String = "",
     val createdAt: Long = System.currentTimeMillis()
 )
 
@@ -63,5 +64,21 @@ data class TripEventEntity(
     val observedAt: Long,
     val latitude: Double,
     val longitude: Double,
+    val syncedAt: Long? = null
+)
+
+@Entity(tableName = "obd_raw_replies", indices = [androidx.room.Index(value = ["tripId", "observedAt"])])
+data class ObdRawReplyEntity(
+    @PrimaryKey val replyId: String,
+    val tripId: String,
+    val observedAt: Long,
+    val mode: Int,
+    val pid: Int?,
+    val command: String,
+    val ecuId: String? = null,
+    /** Full byte stream emitted by ELM, including any ISO-TP framing bytes. */
+    val responseHex: String,
+    val rawResponse: String,
+    val parseStatus: String,
     val syncedAt: Long? = null
 )

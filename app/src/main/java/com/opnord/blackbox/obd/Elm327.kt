@@ -139,6 +139,15 @@ object Elm327Parser {
         return data.fold(0L) { value, byte -> (value shl 8) or byte.toLong() }
     }
 
+    /** Classification for storage only; no width or proprietary meaning is inferred. */
+    fun rawStatus(raw: String, pidCode: Int): String {
+        val text = raw.uppercase()
+        if (adapterErrors.any(text::contains)) return "adapter_error"
+        if (text.contains("NO DATA")) return "unsupported"
+        val bytes = responseBytes(text)
+        return if ((0 until bytes.size - 1).any { bytes[it] == 0x41 && bytes[it + 1] == pidCode }) "captured" else "malformed"
+    }
+
     /** Decode the four-byte support bitmap returned by 0100, 0120, 0140, 0160, or 0180. */
     fun supportedPids(raw: String, rangeStart: Int): Set<ObdPid> {
         return supportedPidCodes(raw, rangeStart).mapNotNullTo(mutableSetOf(), ObdPid::fromCode)

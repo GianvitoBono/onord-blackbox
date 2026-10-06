@@ -41,12 +41,21 @@ import kotlinx.coroutines.flow.Flow
     @Query("SELECT * FROM trip_events WHERE tripId=:tripId AND kind='stop_start' AND stopId NOT IN (SELECT stopId FROM trip_events WHERE tripId=:tripId AND kind='stop_end') ORDER BY observedAt DESC LIMIT 1") suspend fun openStop(tripId: String): TripEventEntity?
 }
 
-@Database(entities = [TripEntity::class, TelemetrySampleEntity::class, PendingSyncBatchEntity::class, TripEventEntity::class], version = 5, exportSchema = true)
+@Dao interface ObdRawReplyDao {
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insert(reply: ObdRawReplyEntity)
+    @Query("SELECT tripId FROM obd_raw_replies WHERE syncedAt IS NULL ORDER BY observedAt LIMIT 1") suspend fun nextUnsyncedTripId(): String?
+    @Query("SELECT * FROM obd_raw_replies WHERE tripId=:tripId AND syncedAt IS NULL ORDER BY observedAt, replyId LIMIT :limit") suspend fun unsyncedForTrip(tripId: String, limit: Int): List<ObdRawReplyEntity>
+    @Query("UPDATE obd_raw_replies SET syncedAt=:at WHERE replyId IN (:ids)") suspend fun markSynced(ids: List<String>, at: Long)
+    @Query("SELECT COUNT(*) FROM obd_raw_replies WHERE tripId=:tripId AND syncedAt IS NULL") suspend fun unsyncedCountForTrip(tripId: String): Int
+}
+
+@Database(entities = [TripEntity::class, TelemetrySampleEntity::class, PendingSyncBatchEntity::class, TripEventEntity::class, ObdRawReplyEntity::class], version = 6, exportSchema = true)
 abstract class BlackBoxDatabase : RoomDatabase() {
     abstract fun trips(): TripDao
     abstract fun samples(): SampleDao
     abstract fun pendingBatches(): PendingSyncBatchDao
     abstract fun events(): TripEventDao
+    abstract fun rawReplies(): ObdRawReplyDao
     companion object {
         @Volatile private var instance: BlackBoxDatabase? = null
         fun get(context: android.content.Context): BlackBoxDatabase = instance ?: synchronized(this) {
@@ -55,6 +64,7 @@ abstract class BlackBoxDatabase : RoomDatabase() {
                 .addMigrations(MIGRATION_2_3)
                 .addMigrations(MIGRATION_3_4)
                 .addMigrations(MIGRATION_4_5)
+                .addMigrations(MIGRATION_5_6)
                 .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING).build().also { instance = it }
         }
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -78,6 +88,13 @@ abstract class BlackBoxDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE pending_sync_batches ADD COLUMN eventIds TEXT NOT NULL DEFAULT ''")
                 db.execSQL("CREATE TABLE IF NOT EXISTS trip_events (eventId TEXT NOT NULL PRIMARY KEY, stopId TEXT NOT NULL, tripId TEXT NOT NULL, kind TEXT NOT NULL, observedAt INTEGER NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL, syncedAt INTEGER)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_trip_events_tripId_observedAt ON trip_events (tripId, observedAt)")
+            }
+        }
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS obd_raw_replies (replyId TEXT NOT NULL PRIMARY KEY, tripId TEXT NOT NULL, observedAt INTEGER NOT NULL, mode INTEGER NOT NULL, pid INTEGER, command TEXT NOT NULL, ecuId TEXT, responseHex TEXT NOT NULL, rawResponse TEXT NOT NULL, parseStatus TEXT NOT NULL, syncedAt INTEGER)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_obd_raw_replies_tripId_observedAt ON obd_raw_replies (tripId, observedAt)")
+                db.execSQL("ALTER TABLE pending_sync_batches ADD COLUMN rawReplyIds TEXT NOT NULL DEFAULT ''")
             }
         }
     }

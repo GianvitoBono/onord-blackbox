@@ -70,6 +70,7 @@ export default function Explore({ tripId, detailError, onRefresh, gps, events, d
 <span className="eyebrow">PUNTO SELEZIONATO</span>
 {displayStopEvent && <section className="stop-inspector" aria-label="Evento sosta selezionato">
 <span className={`stop-event-kind ${displayStopEvent.kind === 'stop_start' ? 'is-start' : 'is-end'}`}>{displayStopEvent.kind === 'stop_start' ? 'Inizio sosta' : 'Fine sosta'}</span>
+{displayStopEvent.inferred && <p className="stop-inferred">Stimata dalle posizioni GPS: verifica orari e durata.</p>}
 <h2>{formatDate(displayStopEvent.observedAt)}</h2>
 <dl className="inspector-data"><div><dt>Durata sosta</dt><dd>{stopDuration(events, displayStopEvent)}</dd></div></dl>
 </section>}

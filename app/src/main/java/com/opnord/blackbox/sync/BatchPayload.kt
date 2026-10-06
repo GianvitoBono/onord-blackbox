@@ -4,17 +4,18 @@ import com.opnord.blackbox.obd.ObdPid
 import com.opnord.blackbox.storage.TelemetrySampleEntity
 import com.opnord.blackbox.storage.TripEventEntity
 import com.opnord.blackbox.storage.TripEntity
+import com.opnord.blackbox.storage.ObdRawReplyEntity
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
 
-data class EncodedBatch(val payload: String, val sampleIds: List<String>, val eventIds: List<String>)
+data class EncodedBatch(val payload: String, val sampleIds: List<String>, val eventIds: List<String>, val rawReplyIds: List<String>)
 
 internal object BatchPayload {
     fun encode(deviceId: String, batchId: String, trip: TripEntity, samples: List<TelemetrySampleEntity>): EncodedBatch =
-        encode(deviceId, batchId, trip, samples, emptyList())
+        encode(deviceId, batchId, trip, samples, emptyList(), emptyList())
 
-    fun encode(deviceId: String, batchId: String, trip: TripEntity, samples: List<TelemetrySampleEntity>, events: List<TripEventEntity>): EncodedBatch {
+    fun encode(deviceId: String, batchId: String, trip: TripEntity, samples: List<TelemetrySampleEntity>, events: List<TripEventEntity>, rawReplies: List<ObdRawReplyEntity> = emptyList()): EncodedBatch {
         val tripJson = JSONObject()
             .put("id", trip.id).put("startedAt", timestamp(trip.startedAt))
             .put("endedAt", trip.endedAt?.let(::timestamp) ?: JSONObject.NULL)
@@ -24,6 +25,14 @@ internal object BatchPayload {
         val obd = JSONArray()
         val device = JSONArray()
         val tripEvents = JSONArray()
+        val rawObdReplies = JSONArray()
+        rawReplies.forEach { reply ->
+            val bytes = runCatching { reply.responseHex.chunked(2).map { it.toInt(16) } }.getOrDefault(emptyList())
+            rawObdReplies.put(JSONObject().put("replyId", reply.replyId).put("observedAt", timestamp(reply.observedAt))
+                .put("tripId", reply.tripId).put("mode", reply.mode).put("pid", reply.pid ?: JSONObject.NULL)
+                .put("command", reply.command).put("ecuId", reply.ecuId ?: JSONObject.NULL)
+                .put("responseBytes", JSONArray(bytes)).put("rawResponse", reply.rawResponse).put("parseStatus", reply.parseStatus))
+        }
         events.forEach { event ->
             tripEvents.put(JSONObject().put("eventId", event.eventId).put("stopId", event.stopId)
                 .put("kind", event.kind).put("observedAt", timestamp(event.observedAt))
@@ -84,8 +93,8 @@ internal object BatchPayload {
         }
         val body = JSONObject().put("schemaVersion", 1).put("deviceId", deviceId).put("batchId", batchId)
             .put("trip", tripJson).put("gpsSamples", gps).put("obdSamples", obd).put("deviceSamples", device)
-            .put("tripEvents", tripEvents)
-        return EncodedBatch(body.toString(), samples.map { it.id }, events.map { it.eventId })
+            .put("tripEvents", tripEvents).put("rawObdReplies", rawObdReplies)
+        return EncodedBatch(body.toString(), samples.map { it.id }, events.map { it.eventId }, rawReplies.map { it.replyId })
     }
 
     private fun timestamp(millis: Long) = Instant.ofEpochMilli(millis).toString()

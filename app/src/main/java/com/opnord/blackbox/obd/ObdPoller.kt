@@ -17,12 +17,16 @@ data class ObdReading(
     val subvalues: Map<String, Double> = emptyMap()
 )
 
+data class RawObdReply(val observedAt: Long, val command: String, val mode: Int, val pid: Int?,
+    val responseBytes: List<Int>, val rawResponse: String, val parseStatus: String, val ecuId: String? = null)
+
 /** Serial, bounded discovery/poll loop. Errors are reported and never terminate the caller's logger. */
 class ObdPoller(
     private val transport: ObdTransport,
     private val intervalMs: Long = 2_000,
     private val commandTimeoutMs: Long = 2_500,
     private val onReading: suspend (ObdReading) -> Unit,
+    private val onRawReply: suspend (RawObdReply) -> Unit = {},
     private val onStatus: (String) -> Unit = {},
     private val onDiscovery: (supported: Int, known: Int, raw: Int) -> Unit = { _, _, _ -> }
 ) {
@@ -33,6 +37,13 @@ class ObdPoller(
             try {
                 onStatus("connecting")
                 withTimeout(10_000) { transport.connect() }
+                // Preserve ECU headers when supported; a clone rejecting this setting must not stop polling.
+                try {
+                    transport.exchange("ATH1", commandTimeoutMs)
+                    transport.exchange("ATS1", commandTimeoutMs)
+                }
+                catch (e: CancellationException) { throw e }
+                catch (_: Exception) { onStatus("connected; ECU header unavailable") }
                 retry = 0
                 val supported = discover()
                 // Frequent driving signals first; slower/less useful values rotate in bounded batches.
@@ -61,16 +72,31 @@ class ObdPoller(
                         (requested.filter { it in priority } + extras).distinct()
                     }
                     batch.forEach { pid ->
+                        val command = "01%02X".format(pid.code)
                         try {
-                            when (val result = Elm327Parser.parse(withTimeout(commandTimeoutMs) { transport.exchange("01%02X".format(pid.code), commandTimeoutMs) }, pid)) {
+                            val response = withTimeout(commandTimeoutMs) { transport.exchange(command, commandTimeoutMs) }
+                            val parsed = Elm327Parser.parse(response, pid)
+                            onRawReply(rawReply(command, response, when (parsed) {
+                                is ObdResult.Value -> "complete"
+                                is ObdResult.Unsupported -> "unsupported"
+                                is ObdResult.Malformed -> "malformed"
+                                is ObdResult.AdapterError -> "adapter_error"
+                            }))
+                            when (val result = parsed) {
                                 is ObdResult.Value -> {
                                     values[pid] = result.value
                                     result.subvalues.forEach { (field, value) -> subvalues["%02X.$field".format(pid.code)] = value }
                                 }
                                 else -> errors += result
                             }
+                        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                            onRawReply(rawReply(command, "ERROR: timeout", "timeout"))
+                            errors += ObdResult.AdapterError("command timeout")
                         } catch (e: CancellationException) { throw e }
-                        catch (e: Exception) { errors += ObdResult.AdapterError(e.message ?: "command failed") }
+                        catch (e: Exception) {
+                            onRawReply(rawReply(command, "ERROR: ${e.message ?: e.javaClass.simpleName}", "error"))
+                            errors += ObdResult.AdapterError(e.message ?: "command failed")
+                        }
                         delay(75)
                     }
                     val rotatingCount = requested.count { it !in priority }
@@ -78,11 +104,20 @@ class ObdPoller(
                     val rawBatch = if (rawRequested.isEmpty()) emptyList() else
                         (0 until minOf(2, rawRequested.size)).map { rawRequested[(rawCursor + it) % rawRequested.size] }
                     rawBatch.forEach { code ->
+                        val command = "01%02X".format(code)
                         try {
-                            val response = withTimeout(commandTimeoutMs) { transport.exchange("01%02X".format(code), commandTimeoutMs) }
-                            Elm327Parser.rawUnsignedValue(response, code)?.let { rawValues[code] = it }
+                            val response = withTimeout(commandTimeoutMs) { transport.exchange(command, commandTimeoutMs) }
+                            val value = Elm327Parser.rawUnsignedValue(response, code)
+                            onRawReply(rawReply(command, response, Elm327Parser.rawStatus(response, code)))
+                            value?.let { rawValues[code] = it }
+                        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                            onRawReply(rawReply(command, "ERROR: timeout", "timeout"))
+                            errors += ObdResult.AdapterError("command timeout")
                         } catch (e: CancellationException) { throw e }
-                        catch (e: Exception) { errors += ObdResult.AdapterError(e.message ?: "command failed") }
+                        catch (e: Exception) {
+                            onRawReply(rawReply(command, "ERROR: ${e.message ?: e.javaClass.simpleName}", "error"))
+                            errors += ObdResult.AdapterError(e.message ?: "command failed")
+                        }
                         delay(75)
                     }
                     if (rawRequested.isNotEmpty()) rawCursor = (rawCursor + minOf(2, rawRequested.size)) % rawRequested.size
@@ -128,8 +163,10 @@ class ObdPoller(
         val discovered = mutableSetOf<Int>()
         var start = 0x00
         while (start <= 0xE0) {
+            val command = "01%02X".format(start)
             try {
-                val response = withTimeout(commandTimeoutMs) { transport.exchange("01%02X".format(start), commandTimeoutMs) }
+                val response = withTimeout(commandTimeoutMs) { transport.exchange(command, commandTimeoutMs) }
+                onRawReply(rawReply(command, response, Elm327Parser.rawStatus(response, start)))
                 discovered += Elm327Parser.supportedPidCodes(response, start)
                 // A clear continuation bit means later 32-PID blocks are unavailable.
                 val bytes = Elm327Parser.responseBytes(response)
@@ -141,4 +178,16 @@ class ObdPoller(
         }
         return discovered
     }
+
+    private fun rawReply(command: String, raw: String, status: String) = RawObdReply(
+        System.currentTimeMillis(), command, command.take(2).toIntOrNull(16) ?: 1,
+        command.drop(2).take(2).toIntOrNull(16), Elm327Parser.responseBytes(raw), raw.take(4096), status,
+        ecuId = raw.lineSequence().mapNotNull { line ->
+            val text = line.trim().uppercase()
+            Regex("^[0-9A-F]{8}(?=\\s)").find(text)?.value
+                ?: Regex("^18\\s+D[AB]\\s+[0-9A-F]{2}\\s+[0-9A-F]{2}(?=\\s)")
+                    .find(text)?.value?.replace(Regex("\\s+"), "")
+                ?: Regex("^[0-9A-F]{3}(?=\\s)").find(text)?.value
+        }.distinct().singleOrNull()
+    )
 }

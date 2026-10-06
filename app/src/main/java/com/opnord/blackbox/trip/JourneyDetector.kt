@@ -37,6 +37,7 @@ class JourneyDetector(
     private var stationarySince: Long? = openStop?.observedAt
     private var stationaryPoint: Location? = openStop?.let { point(it) }
     private var currentStop = openStop
+    private var departureCandidate: Location? = null
 
     fun observe(location: Location): JourneyDecision {
         if (location.time <= lastObservedAt) return JourneyDecision()
@@ -78,17 +79,34 @@ class JourneyDetector(
         val moving = distance >= 60f ||
             (distance >= 20f && location.hasSpeed() && location.speed >= 3f)
         if (moving) {
+            if (currentStop != null) {
+                val candidate = departureCandidate
+                if (candidate == null) {
+                    departureCandidate = Location(location)
+                    return JourneyDecision()
+                }
+                // A single displaced GPS fix must not end a stop. Require progress or two fast fixes.
+                val progressed = candidate.distanceTo(location) >= 15f ||
+                    (candidate.hasSpeed() && location.hasSpeed() && candidate.speed >= 3f && location.speed >= 3f)
+                if (!progressed) return JourneyDecision()
+                val ended = currentStop?.copy(
+                    observedAt = candidate.time,
+                    latitude = candidate.latitude,
+                    longitude = candidate.longitude
+                )
+                departureCandidate = null
+                currentStop = null
+                motionAnchor = Location(location)
+                stationarySince = null
+                stationaryPoint = null
+                return JourneyDecision(stopEnd = ended)
+            }
             motionAnchor = Location(location)
             stationarySince = null
             stationaryPoint = null
-            val ended = currentStop?.copy(
-                observedAt = location.time,
-                latitude = location.latitude,
-                longitude = location.longitude
-            )
-            currentStop = null
-            return JourneyDecision(stopEnd = ended)
+            return JourneyDecision()
         }
+        departureCandidate = null
 
         val since = stationarySince ?: location.time.also {
             stationarySince = it

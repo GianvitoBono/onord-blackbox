@@ -51,6 +51,7 @@ export type TripEvent = {
   eventId: string
   stopId: string
   kind: 'stop_start' | 'stop_end'
+  inferred?: boolean
   observedAt: string
   latitude: number
   longitude: number
@@ -65,6 +66,7 @@ export async function updateMetricDefinition(name: string, displayName: string, 
   })
 }
 export type MetricSample = { sampleId: string; observedAt: string; name: string; unit: string; value: number }
+export type RawObdReply = { replyId: string; observedAt: string; mode: number; pid?: number | null; command: string; ecuId?: string | null; responseHex: string; rawResponse: string; parseStatus: string }
 export type VehicleStatus = { tripId: string | null; gps: GpsSample | null; metrics: MetricSample[] }
 export type EcuIdentityRead = { command: string; status: string; raw: string; values_by_ecu?: Record<string, string>; detail?: string | null }
 export type EcuIdentityReport = { summary?: string; adapter?: string | null; protocol_number?: string | null; protocol_name?: string | null; error?: string | null; reads?: EcuIdentityRead[] }
@@ -248,6 +250,12 @@ export async function fetchTripTelemetryAt(tripId: string, at: string, tolerance
 export async function fetchTripMetricCatalog(tripId: string, signal?: AbortSignal): Promise<MetricDefinition[]> {
   return unwrapList<MetricDefinition>(await request<unknown>(`/api/v1/trips/${encodeURIComponent(tripId)}/metric-catalog`, { signal }))
     .filter((metric) => typeof metric.name === 'string' && typeof metric.unit === 'string')
+}
+
+export async function fetchTripRawObd(tripId: string, before?: Pick<RawObdReply, 'observedAt' | 'replyId'>, signal?: AbortSignal): Promise<RawObdReply[]> {
+  const params = new URLSearchParams({ limit: '500' })
+  if (before) { params.set('beforeAt', before.observedAt); params.set('beforeReplyId', before.replyId) }
+  return unwrapList<RawObdReply>(await request<unknown>(`/api/v1/trips/${encodeURIComponent(tripId)}/obd-raw?${params}`, { signal }))
 }
 
 export async function fetchTripMetricSamples(tripId: string, name: string, from: string, to: string, signal?: AbortSignal, limit = 2000): Promise<MetricSample[]> {

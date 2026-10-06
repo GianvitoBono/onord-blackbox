@@ -32,6 +32,9 @@ export default function TripMap({ samples, events = [], selectedSampleId, onPoin
   callbacksRef.current = { onPointHover, onPointSelect, onEventHover, onEventSelect }
 
   const routeKey = useMemo(() => samples.map((sample) => sample.sampleId).join('|'), [samples])
+  const stops = useMemo(() => events.filter(event => event.kind === 'stop_start').map(start => ({
+    start, end: events.find(event => event.stopId === start.stopId && event.kind === 'stop_end'),
+  })), [events])
 
   useEffect(() => {
     if (!hostRef.current || mapRef.current) return
@@ -106,16 +109,12 @@ export default function TripMap({ samples, events = [], selectedSampleId, onPoin
     for (const event of events || []) {
       if (!Number.isFinite(event.latitude) || !Number.isFinite(event.longitude)) continue
       const isStart = event.kind === 'stop_start'
-      const marker = L.circleMarker([event.latitude, event.longitude], {
-        renderer: map.options.renderer,
-        radius: 7,
-        color: '#f7faf8',
-        weight: 2,
-        fillColor: isStart ? '#e6a83c' : '#d66e59',
-        fillOpacity: 1,
-        bubblingMouseEvents: false,
+      const marker = L.marker([event.latitude, event.longitude], {
+        zIndexOffset: 500,
+        icon: L.divIcon({ className: `trip-stop-marker ${isStart ? 'is-start' : 'is-end'}`,
+          html: `<span aria-hidden="true">${isStart ? 'Ⅱ' : '▶'}</span>`, iconSize: [30, 30], iconAnchor: [15, 15] }),
       }).addTo(layer)
-      marker.bindTooltip(isStart ? 'Inizio sosta' : 'Fine sosta', { direction: 'top', offset: [0, -6] })
+      marker.bindTooltip(`${isStart ? 'Inizio' : 'Fine'} sosta${event.inferred ? ' · stimata da GPS' : ''}`, { direction: 'top', offset: [0, -13] })
       marker.on('mouseover', () => callbacksRef.current.onEventHover?.(event))
       marker.on('mouseout', () => callbacksRef.current.onEventHover?.(null))
       marker.on('click', () => callbacksRef.current.onEventSelect?.(event))
@@ -188,6 +187,15 @@ export default function TripMap({ samples, events = [], selectedSampleId, onPoin
   return (
     <div className={`trip-map${tileUrl === defaultTileUrl ? ' trip-map--osm-default' : ''}`} aria-label="Mappa del percorso">
       <div className="trip-map__canvas" ref={hostRef} />
+      {stops.length > 0 && <div className="trip-map__stops" aria-label="Soste del viaggio">
+        <strong>{stops.length} {stops.length === 1 ? 'sosta' : 'soste'}</strong>
+        <div>{stops.slice(0, 4).map(({ start, end }, index) => <button type="button" key={start.stopId}
+          onClick={() => { mapRef.current?.panTo([start.latitude, start.longitude]); onEventSelect?.(start) }}>
+          <span>{index + 1}</span><b>{new Date(start.observedAt).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}</b>
+          <small>{end ? `${Math.round((Date.parse(end.observedAt) - Date.parse(start.observedAt)) / 60_000)} min` : 'in corso'}</small>
+        </button>)}</div>
+        {stops.length > 4 && <small>+{stops.length - 4} sulla traccia</small>}
+      </div>}
       {!samples.length && <div className="trip-map__empty">Seleziona un viaggio per vedere il percorso</div>}
     </div>
   )

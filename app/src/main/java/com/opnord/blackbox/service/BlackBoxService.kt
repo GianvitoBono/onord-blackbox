@@ -282,6 +282,18 @@ class BlackBoxService : LifecycleService() {
                     getSharedPreferences("diagnostics", MODE_PRIVATE).edit()
                         .putLong("last_obd", reading.observedAt)
                         .putInt("obd_last_values", v.size + reading.subvalues.size + reading.rawValues.size + reading.derived.size).apply()
+                }, onRawReply = { reply ->
+                    try {
+                        db.rawReplies().insert(ObdRawReplyEntity(
+                            UUID.randomUUID().toString(), forTripId, reply.observedAt, reply.mode, reply.pid, reply.command,
+                            reply.ecuId, reply.responseBytes.joinToString("") { "%02X".format(it) }, reply.rawResponse, reply.parseStatus
+                        ))
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        getSharedPreferences("diagnostics", MODE_PRIVATE).edit()
+                            .putString("obd_raw_status", "Salvataggio risposta OBD fallito: ${error.javaClass.simpleName}").apply()
+                    }
                 }, onStatus = { status -> getSharedPreferences("diagnostics", MODE_PRIVATE).edit().putString("obd_status", status).apply() },
                     onDiscovery = { supported, known, raw -> getSharedPreferences("diagnostics", MODE_PRIVATE).edit()
                         .putInt("obd_supported", supported).putInt("obd_known", known).putInt("obd_raw", raw).apply() }).run()
