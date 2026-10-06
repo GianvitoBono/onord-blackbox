@@ -1,6 +1,7 @@
 import type { Dispatch, SetStateAction, FormEvent } from 'react'
 import type { ManagedDevice, Vehicle, VehicleEcuIdentity, VehicleStatus } from '../api'
 import { formatDate, metricLabel } from './format'
+import { rawPidValue } from './pidCatalog'
 
 type VehicleForm = { displayName: string; make: string; model: string; modelYear: string }
 type Props = { vehicles: Vehicle[]; devices: ManagedDevice[]; selectedId: string; selectedVehicle?: Vehicle; selectedDevice?: ManagedDevice; deviceFresh: boolean; vehicleStatus: VehicleStatus | null; statusError: string; ecuIdentity: VehicleEcuIdentity | null; ecuIdentityError: string; vehicleMessage: string; vehicleEditing: string | null; vehicleForm: VehicleForm; setVehicleForm: Dispatch<SetStateAction<VehicleForm>>; vehicleBusy: boolean; saveVehicle: (event: FormEvent) => Promise<void>; editVehicle: (vehicle?: Vehicle) => void; setVehicleEditing: Dispatch<SetStateAction<string | null>>; selectVehicle: (id: string) => void; openTrip: (id: string) => void; now: number }
@@ -12,7 +13,7 @@ const freshness = (timestamp: string | undefined, now: number) => {
   return age <= 10 * 60_000 ? 'Recente' : 'Obsoleto'
 }
 const ecuLabels: Record<string, string> = { '0904': 'ID calibrazione', '0906': 'CVN', '090A': 'Nome ECU' }
-const metricSource = (name: string) => name.startsWith('device.') ? 'Telefono' : name.startsWith('obd.calc.') ? 'Calcolato' : 'OBD'
+const metricSource = (name: string) => name.startsWith('device.') ? 'Telefono' : name.startsWith('gps.') ? 'GPS' : name.startsWith('obd.calc.') ? 'Calcolato' : 'OBD'
 
 export default function Fleet({ vehicles, devices, selectedId, selectedVehicle, selectedDevice, deviceFresh, vehicleStatus, statusError, ecuIdentity, ecuIdentityError, vehicleMessage, vehicleEditing, vehicleForm, setVehicleForm, vehicleBusy, saveVehicle, editVehicle, setVehicleEditing, selectVehicle, openTrip, now }: Props) {
   return (
@@ -114,8 +115,8 @@ export default function Fleet({ vehicles, devices, selectedId, selectedVehicle, 
   </div> : vehicleStatus && <p className="inspector-muted">Nessun punto GPS disponibile.</p>}
   {vehicleStatus?.metrics.length ? <div className="fleet-metrics">
     {vehicleStatus.metrics.map(metric => <div key={metric.name}>
-      <span>{metricLabel({ name: metric.name, unit: metric.unit })}<small>{metricSource(metric.name)} · {formatDate(metric.observedAt)} · {freshness(metric.observedAt, now)}</small></span>
-      <strong>{metric.value.toLocaleString('it-IT', { maximumFractionDigits: 2 })} {metric.unit}</strong>
+      <span>{metricLabel({ name: metric.name, unit: metric.unit })}<small>{metricSource(metric.name)} · {formatDate(metric.observedAt)} · {freshness(metric.observedAt, now)}{metric.unit === 'raw_unsigned_integer' ? ' · Dato codificato' : ''}</small></span>
+      <strong>{metric.unit === 'raw_unsigned_integer' ? rawPidValue(metric.value) : `${metric.value.toLocaleString('it-IT', { maximumFractionDigits: 2 })} ${metric.unit}`}</strong>
     </div>)}
   </div> : vehicleStatus && <p className="inspector-muted">Nessun segnale disponibile.</p>}
 </section>}

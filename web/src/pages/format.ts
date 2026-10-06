@@ -1,4 +1,5 @@
 import type { GpsSample, MetricDefinition } from '../api'
+import { standardPidName } from './pidCatalog'
 
 const dateTime = new Intl.DateTimeFormat('it-IT', { dateStyle: 'medium', timeStyle: 'short' })
 export const time = new Intl.DateTimeFormat('it-IT', { timeStyle: 'short' })
@@ -20,7 +21,10 @@ export type Page = typeof pages[number]
 export const labels: Record<Page, string> = { overview: 'Panoramica', journeys: 'Viaggi', explore: 'Esplora', metrics: 'Metriche', diagnostics: 'Diagnostica', fleet: 'Flotta', admin: 'Admin', settings: 'Impostazioni' }
 export const glyphs: Record<Page, string> = { overview: '◫', journeys: '↝', explore: '◎', metrics: '▥', diagnostics: '⚠', fleet: '▤', admin: '◇', settings: '⚙' }
 export function pageFromHash(): Page { const value = location.hash.slice(1); return pages.includes(value as Page) ? value as Page : 'overview' }
-export function metricLabel(metric: MetricDefinition) { return metric.description || metric.name.replace(/^obd\.pid\./, 'PID ').replaceAll('.', ' · ').replaceAll('_', ' ') }
+export function metricLabel(metric: MetricDefinition) {
+  if (metric.description && !/^Mode 01 PID [0-9A-F]{2} raw unsigned integer$/i.test(metric.description)) return metric.description
+  return standardPidName(metric.name) || metric.name.replace(/^obd\.pid\./, 'PID ').replaceAll('.', ' · ').replaceAll('_', ' ')
+}
 export function nearestGps(samples: GpsSample[], at: string) {
   if (!samples.length) return null
   const target = Date.parse(at)

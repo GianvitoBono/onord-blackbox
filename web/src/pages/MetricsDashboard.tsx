@@ -29,7 +29,8 @@ function savedMetrics(): string[] {
 }
 
 function defaultMetrics(catalog: MetricDefinition[]) {
-  return [...catalog].sort((a, b) => {
+  const plottable = catalog.filter(metric => metric.unit !== 'raw_unsigned_integer')
+  return [...(plottable.length ? plottable : catalog)].sort((a, b) => {
     const rank = (name: string) => {
       const index = priority.findIndex(part => name.endsWith(part) || name.includes(`.${part}`))
       return index === -1 ? priority.length : index
