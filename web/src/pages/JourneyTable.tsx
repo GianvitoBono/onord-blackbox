@@ -1,5 +1,5 @@
 import type { Trip } from '../api'
-import { formatDate, formatDistance } from './format'
+import { formatDate, formatDistance, tripReason } from './format'
 
 export default function JourneyTable({ trips, openTrip, loading }: { trips: Trip[]; openTrip: (id: string) => void; loading: boolean }) { return <div className="table-shell">
 <table className="journey-table">
@@ -7,6 +7,7 @@ export default function JourneyTable({ trips, openTrip, loading }: { trips: Trip
 <tr>
 <th>VIAGGIO</th>
 <th>INIZIO</th>
+<th>FINE</th>
 <th>DURATA</th>
 <th>DISTANZA</th>
 <th>STATO</th>
@@ -21,10 +22,12 @@ export default function JourneyTable({ trips, openTrip, loading }: { trips: Trip
 </span>
 <strong>Viaggio {formatDate(trip.startedAt)}
 </strong>
+<small className="trip-reason">Avvio: {tripReason(trip.startReason)}</small>
 </td>
 <td>
 {formatDate(trip.startedAt)}
 </td>
+<td>{trip.endedAt ? <>{formatDate(trip.endedAt)}<small className="trip-reason">{tripReason(trip.endReason)}</small></> : '—'}</td>
 <td>
 {duration == null ? 'In corso' : `${Math.floor(duration / 60)}h ${String(duration % 60).padStart(2, '0')}m`}
 </td>

@@ -39,6 +39,7 @@ export default function App() {
   const [nearbyLoading, setNearbyLoading] = useState(false)
   const [loading, setLoading] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [refreshTick, setRefreshTick] = useState(0)
   const [error, setError] = useState('')
   const [detailError, setDetailError] = useState('')
   const [updatedAt, setUpdatedAt] = useState<Date | null>(null)
@@ -86,9 +87,36 @@ export default function App() {
     const timer = window.setInterval(refresh, 30_000)
     return () => { window.clearInterval(timer); controller.abort() }
   }, [signedIn, selectedId, clearSession])
-  useEffect(() => { if (!signedIn || !selectedId) { setTrips([]); setTripId(''); return }; const controller = new AbortController(); setDetailLoading(true); setDetailError(''); setTripId(''); setGps([]); setCatalog([]); setMetrics([]); setSelectedPoint(null); void fetchTrips(selectedId, controller.signal).then(rows => { if (controller.signal.aborted) return; const ordered = [...rows].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt)); setTrips(ordered); setTripId(ordered[0]?.id || '') }).catch(e => { if (!controller.signal.aborted) setDetailError(message(e)) }).finally(() => { if (!controller.signal.aborted) setDetailLoading(false) }); return () => controller.abort() }, [signedIn, selectedId])
-  useEffect(() => { if (!tripId) { setGps([]); setCatalog([]); return }; const controller = new AbortController(); setDetailLoading(true); setDetailError(''); setSelectedPoint(null); setHoverPoint(null); setNearby([]); void Promise.all([fetchTripGps(tripId, controller.signal), fetchTripMetricCatalog(tripId, controller.signal)]).then(([points, definitions]) => { if (controller.signal.aborted) return; setGps(points); setCatalog(definitions); setMetricName(current => definitions.some(m => m.name === current) ? current : definitions[0]?.name || '') }).catch(e => { if (!controller.signal.aborted) setDetailError(message(e)) }).finally(() => { if (!controller.signal.aborted) setDetailLoading(false) }); return () => controller.abort() }, [tripId])
-  useEffect(() => { if (!tripId || !metricName || !selectedTrip) { setMetrics([]); return }; const controller = new AbortController(); void fetchTripMetricSamples(tripId, metricName, selectedTrip.startedAt, selectedTrip.endedAt || new Date().toISOString(), controller.signal).then(setMetrics).catch(e => { if (!controller.signal.aborted) setDetailError(message(e)) }); return () => controller.abort() }, [tripId, metricName, selectedTrip])
+  useEffect(() => { setTrips([]); setTripId(''); setGps([]); setCatalog([]); setMetrics([]); setSelectedPoint(null) }, [signedIn, selectedId])
+  useEffect(() => {
+    if (!signedIn || !selectedId) return
+    const controller = new AbortController()
+    setDetailLoading(true)
+    setDetailError('')
+    void fetchTrips(selectedId, controller.signal).then(rows => {
+      if (controller.signal.aborted) return
+      const ordered = [...rows].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))
+      setTrips(ordered)
+      setTripId(current => ordered.some(t => t.id === current) ? current : ordered[0]?.id || '')
+    }).catch(e => { if (!controller.signal.aborted) setDetailError(message(e)) }).finally(() => { if (!controller.signal.aborted) setDetailLoading(false) })
+    return () => controller.abort()
+  }, [signedIn, selectedId, refreshTick])
+  useEffect(() => { setSelectedPoint(null); setHoverPoint(null); setNearby([]); setGps([]); setCatalog([]); setMetrics([]) }, [tripId])
+  useEffect(() => {
+    if (!tripId) return
+    const controller = new AbortController()
+    setDetailLoading(true)
+    setDetailError('')
+    void Promise.all([fetchTripGps(tripId, controller.signal), fetchTripMetricCatalog(tripId, controller.signal)]).then(([points, definitions]) => {
+      if (controller.signal.aborted) return
+      setGps(points)
+      setCatalog(definitions)
+      setMetricName(current => definitions.some(m => m.name === current) ? current : definitions[0]?.name || '')
+    }).catch(e => { if (!controller.signal.aborted) setDetailError(message(e)) }).finally(() => { if (!controller.signal.aborted) setDetailLoading(false) })
+    return () => controller.abort()
+  }, [tripId, refreshTick])
+  useEffect(() => { if (!tripId || !metricName || !selectedTrip) { setMetrics([]); return }; const controller = new AbortController(); void fetchTripMetricSamples(tripId, metricName, selectedTrip.startedAt, selectedTrip.endedAt || new Date().toISOString(), controller.signal).then(setMetrics).catch(e => { if (!controller.signal.aborted) setDetailError(message(e)) }); return () => controller.abort() }, [tripId, metricName, selectedTrip, refreshTick])
+  useEffect(() => { if (page !== 'explore' || !signedIn) return; const timer = window.setInterval(() => setRefreshTick(value => value + 1), 30_000); return () => window.clearInterval(timer) }, [page, signedIn])
   useEffect(() => { if (!tripId || !displayPoint) { setNearby([]); return }; const controller = new AbortController(); const point = displayPoint; setNearbyLoading(true); const timer = window.setTimeout(() => { void fetchTripTelemetryAt(tripId, point.observedAt, 2000, controller.signal).then(rows => { if (!controller.signal.aborted) setNearby(rows) }).catch(() => { if (!controller.signal.aborted) setNearby([]) }).finally(() => { if (!controller.signal.aborted) setNearbyLoading(false) }) }, 200); return () => { clearTimeout(timer); controller.abort() } }, [tripId, displayPoint?.sampleId])
   useEffect(() => { if (selectedId) localStorage.setItem('opnord.vehicle', selectedId) }, [selectedId])
   useEffect(() => { document.documentElement.dataset.theme = theme; document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#17211d' : '#f5f6f3'); try { localStorage.setItem('opnord.theme', theme) } catch { /* Theme still works for this tab. */ } }, [theme])
@@ -99,6 +127,7 @@ export default function App() {
   function editVehicle(vehicle?: Vehicle) { setVehicleEditing(vehicle?.id || 'new'); setVehicleForm({ displayName: vehicle?.displayName || '', make: vehicle?.make || '', model: vehicle?.model || '', modelYear: vehicle?.modelYear?.toString() || '' }) }
   function selectVehicle(id: string) { setSelectedId(id); setAdminPassword({}); setIssuedToken(null) }
   function openTrip(id: string) { setTripId(id); location.hash = 'explore' }
+  async function refreshAll() { await loadFleet(); setRefreshTick(value => value + 1) }
   async function approve(row: PendingDevice) { const secret = adminPassword[row.deviceId] || ''; const vehicleId = adminVehicle[row.deviceId] || ''; const displayName = adminName[row.deviceId]?.trim() || ''; if (!secret || !vehicleId || !displayName) { setAdminMessage('Inserisci nome, mezzo e password.'); return }; setAdminBusy(row.deviceId); setAdminMessage(''); setAdminPassword({}); try { await approvePendingDevice(row.deviceId, secret, vehicleId, displayName); setAdminMessage(`Dispositivo ${row.deviceId} approvato.`); await loadFleet() } catch (e) { setAdminMessage(message(e)) } finally { setAdminBusy('') } }
   async function rotate(device: ManagedDevice) { const secret = adminPassword[device.id] || ''; const token = tokenMode[device.id] === 'custom' ? customToken[device.id] : undefined; if (!secret) { setAdminMessage('Inserisci password account.'); return }; if (tokenMode[device.id] === 'custom' && !/^[A-Za-z0-9_-]{16,128}$/.test(token || '')) { setAdminMessage('Token: 16–128 caratteri, lettere, numeri, _ o -.'); return }; setAdminBusy(device.id); setAdminMessage(''); setAdminPassword({}); setCustomToken({}); setIssuedToken(null); try { const result = await rotateDeviceToken(device.id, secret, token); setIssuedToken({ deviceId: device.id, token: result.deviceToken }); setAdminMessage('Token precedente revocato. Copia il nuovo token e impostalo sul telefono.') } catch (e) { setAdminMessage(message(e)) } finally { setAdminBusy('') } }
   const nav = (p: Page) => <a key={p} href={`#${p}`} className={`nav-link ${page === p ? 'is-active' : ''}`} aria-current={page === p ? 'page' : undefined}>
@@ -177,9 +206,9 @@ export default function App() {
 {error}
 <button onClick={() => void loadFleet()}>Riprova</button>
 </div>}
-        {page === 'overview' && <Overview selectedVehicle={selectedVehicle} trips={trips} totalDistance={totalDistance} detailLoading={detailLoading} deviceFresh={deviceFresh} updatedAt={updatedAt} loading={loading} loadFleet={loadFleet} openTrip={openTrip} />}
+        {page === 'overview' && <Overview selectedVehicle={selectedVehicle} trips={trips} totalDistance={totalDistance} detailLoading={detailLoading} deviceFresh={deviceFresh} updatedAt={updatedAt} loading={loading} loadFleet={refreshAll} openTrip={openTrip} />}
         {page === 'journeys' && <Journeys selectedVehicle={selectedVehicle} trips={trips} detailLoading={detailLoading} openTrip={openTrip} />}
-        {page === 'explore' && <Explore trips={trips} tripId={tripId} setTripId={setTripId} selectedTrip={selectedTrip} detailError={detailError} gps={gps} displayPoint={displayPoint} setHoverPoint={setHoverPoint} setSelectedPoint={setSelectedPoint} nearby={nearby} nearbyLoading={nearbyLoading} catalog={catalog} metricName={metricName} setMetricName={setMetricName} metrics={metrics} selectedMetric={selectedMetric} />}
+        {page === 'explore' && <Explore trips={trips} tripId={tripId} setTripId={setTripId} selectedTrip={selectedTrip} detailError={detailError} detailLoading={detailLoading} onRefresh={() => setRefreshTick(value => value + 1)} gps={gps} displayPoint={displayPoint} setHoverPoint={setHoverPoint} setSelectedPoint={setSelectedPoint} nearby={nearby} nearbyLoading={nearbyLoading} catalog={catalog} metricName={metricName} setMetricName={setMetricName} metrics={metrics} selectedMetric={selectedMetric} />}
         {page === 'fleet' && <Fleet vehicles={vehicles} devices={devices} selectedId={selectedId} selectedVehicle={selectedVehicle} selectedDevice={selectedDevice} deviceFresh={deviceFresh} vehicleStatus={vehicleStatus} statusError={statusError} vehicleMessage={vehicleMessage} vehicleEditing={vehicleEditing} vehicleForm={vehicleForm} setVehicleForm={setVehicleForm} vehicleBusy={vehicleBusy} saveVehicle={saveVehicle} editVehicle={editVehicle} setVehicleEditing={setVehicleEditing} selectVehicle={selectVehicle} openTrip={openTrip} />}
         {page === 'admin' && <Admin vehicles={vehicles} devices={devices} pending={pending} adminMessage={adminMessage} adminVehicle={adminVehicle} setAdminVehicle={setAdminVehicle} adminName={adminName} setAdminName={setAdminName} adminPassword={adminPassword} setAdminPassword={setAdminPassword} adminBusy={adminBusy} tokenMode={tokenMode} setTokenMode={setTokenMode} customToken={customToken} setCustomToken={setCustomToken} issuedToken={issuedToken} approve={approve} rotate={rotate} loadFleet={loadFleet} />}
         {page === 'settings' && <Settings theme={theme} setTheme={setTheme} signedIn={signedIn} updatedAt={updatedAt} />}

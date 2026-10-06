@@ -374,6 +374,19 @@ a {
   color:#2c3b34;
   font-weight:700
 }
+.trip-reason {
+  display:block;
+  margin-top:5px;
+  color:var(--muted);
+  font-size:11px;
+  font-weight:400
+}
+.explore-controls {
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:10px
+}
 .trip-index {
   color:#9aaba2;
   margin-right:14px;
@@ -929,6 +942,9 @@ a {
     flex-direction:column
   }
 .explore-heading .trip-selector {
+    width:100%
+  }
+  .explore-controls {
     width:100%
   }
 .large-map {

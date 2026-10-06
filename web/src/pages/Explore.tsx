@@ -2,11 +2,11 @@ import type { Dispatch, SetStateAction } from 'react'
 import type { GpsSample, MetricDefinition, MetricSample, Trip } from '../api'
 import TripMap from '../components/TripMap'
 import TelemetryChart from '../components/TelemetryChart'
-import { formatDate, formatDistance, metricLabel, nearestGps, type NearbyReading } from './format'
+import { formatDate, formatDistance, metricLabel, nearestGps, tripReason, type NearbyReading } from './format'
 
-type Props = { trips: Trip[]; tripId: string; setTripId: Dispatch<SetStateAction<string>>; selectedTrip?: Trip; detailError: string; gps: GpsSample[]; displayPoint: GpsSample | null; setHoverPoint: Dispatch<SetStateAction<GpsSample | null>>; setSelectedPoint: Dispatch<SetStateAction<GpsSample | null>>; nearby: NearbyReading[]; nearbyLoading: boolean; catalog: MetricDefinition[]; metricName: string; setMetricName: Dispatch<SetStateAction<string>>; metrics: MetricSample[]; selectedMetric?: MetricDefinition }
+type Props = { trips: Trip[]; tripId: string; setTripId: Dispatch<SetStateAction<string>>; selectedTrip?: Trip; detailError: string; detailLoading: boolean; onRefresh: () => void; gps: GpsSample[]; displayPoint: GpsSample | null; setHoverPoint: Dispatch<SetStateAction<GpsSample | null>>; setSelectedPoint: Dispatch<SetStateAction<GpsSample | null>>; nearby: NearbyReading[]; nearbyLoading: boolean; catalog: MetricDefinition[]; metricName: string; setMetricName: Dispatch<SetStateAction<string>>; metrics: MetricSample[]; selectedMetric?: MetricDefinition }
 
-export default function Explore({ trips, tripId, setTripId, selectedTrip, detailError, gps, displayPoint, setHoverPoint, setSelectedPoint, nearby, nearbyLoading, catalog, metricName, setMetricName, metrics, selectedMetric }: Props) {
+export default function Explore({ trips, tripId, setTripId, selectedTrip, detailError, detailLoading, onRefresh, gps, displayPoint, setHoverPoint, setSelectedPoint, nearby, nearbyLoading, catalog, metricName, setMetricName, metrics, selectedMetric }: Props) {
   return (
     <>
 <div className="page-heading explore-heading">
@@ -15,11 +15,11 @@ export default function Explore({ trips, tripId, setTripId, selectedTrip, detail
 <h1>Esplora</h1>
 <p>Mappa e segnali sincronizzati. Passa sui punti per vedere i dati.</p>
 </div>
-<select className="trip-selector" aria-label="Seleziona viaggio" value={tripId} onChange={e => setTripId(e.target.value)}>
+<div className="explore-controls"><button className="outline-button" type="button" onClick={onRefresh} disabled={detailLoading}>{detailLoading ? 'Aggiornamento…' : '↻ Aggiorna dati'}</button><select className="trip-selector" aria-label="Seleziona viaggio" value={tripId} onChange={e => setTripId(e.target.value)}>
 {trips.length === 0 && <option value="">Nessun viaggio</option>}{trips.map(t => <option key={t.id} value={t.id}>
 {formatDate(t.startedAt)} · {formatDistance(t.distanceGpsM ?? t.distanceObdM)}
 </option>)}
-</select>
+</select></div>
 </div>
 {detailError && <div className="banner error">
 {detailError}
@@ -32,6 +32,7 @@ export default function Explore({ trips, tripId, setTripId, selectedTrip, detail
 <h2>
 {selectedTrip ? formatDate(selectedTrip.startedAt) : 'Seleziona un viaggio'}
 </h2>
+{selectedTrip && <p>Fine: {selectedTrip.endedAt ? formatDate(selectedTrip.endedAt) : 'in corso'} · Avvio: {tripReason(selectedTrip.startReason)} · Chiusura: {tripReason(selectedTrip.endReason)}</p>}
 </div>
 <span>
 {gps.length === 5000 ? 'Primi 5.000 punti mostrati' : `${gps.length} punti`}

@@ -8,7 +8,7 @@ Eseguire `npm install` e `npm run dev` dalla cartella `web`. Vite inoltra `/api`
 
 ## Interfaccia
 
-Menu laterale: riepilogo, viaggi, mappa e telemetria, mezzi, amministrazione, impostazioni. Il mezzo selezionato resta salvato nel browser. La mappa carica i singoli punti GPS di un tour, consente di ispezionarli con il mouse e mostra le letture OBD temporalmente vicine. Il grafico permette ispezione, selezione e zoom temporale. I temi chiaro e scuro seguono inizialmente il sistema; la scelta nelle impostazioni resta salvata nel browser.
+Menu laterale: riepilogo, viaggi, mappa e telemetria, mezzi, amministrazione, impostazioni. Il mezzo selezionato resta salvato nel browser. La mappa carica i singoli punti GPS di un tour, consente di ispezionarli con il mouse e mostra le letture OBD temporalmente vicine. La vista Esplora aggiorna viaggio, punti e metriche ogni 30 secondi; il pulsante «Aggiorna dati» forza il caricamento. Il grafico permette ispezione, selezione e zoom temporale. I temi chiaro e scuro seguono inizialmente il sistema; la scelta nelle impostazioni resta salvata nel browser.
 
 ## Mappa
 

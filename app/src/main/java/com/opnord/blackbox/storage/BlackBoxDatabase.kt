@@ -11,7 +11,8 @@ import kotlinx.coroutines.flow.Flow
     @Query("UPDATE trips SET endedAt=:endedAt, endReason=:reason, state='CLOSED' WHERE id=:id") suspend fun close(id: String, endedAt: Long, reason: String)
     @Query("SELECT COUNT(*) FROM trips") fun countFlow(): Flow<Int>
     @Query("SELECT * FROM trips WHERE id=:id") suspend fun byId(id: String): TripEntity?
-    @Query("UPDATE trips SET syncedAt=:at WHERE id=:id") suspend fun markSynced(id: String, at: Long)
+    @Query("UPDATE trips SET syncedAt=MAX(:at, COALESCE(endedAt, :at)) WHERE id=:id") suspend fun markSynced(id: String, at: Long)
+    @Query("SELECT id FROM trips WHERE state='CLOSED' AND (syncedAt IS NULL OR syncedAt < endedAt) ORDER BY endedAt LIMIT 1") suspend fun nextClosedNeedingSync(): String?
 }
 
 @Dao interface SampleDao {
@@ -19,7 +20,7 @@ import kotlinx.coroutines.flow.Flow
     @Query("SELECT COUNT(*) FROM samples") fun countFlow(): Flow<Int>
     @Query("SELECT COUNT(*) FROM samples WHERE syncedAt IS NULL") fun unsyncedCountFlow(): Flow<Int>
     @Query("UPDATE samples SET syncedAt=:at WHERE id IN (:ids)") suspend fun markSynced(ids: List<String>, at: Long)
-    @Query("SELECT s.tripId FROM samples AS s INNER JOIN trips AS t ON t.id=s.tripId WHERE s.syncedAt IS NULL AND t.state='CLOSED' GROUP BY s.tripId ORDER BY MIN(s.timestamp) LIMIT 1") suspend fun nextUnsyncedTripId(): String?
+    @Query("SELECT s.tripId FROM samples AS s WHERE s.syncedAt IS NULL GROUP BY s.tripId ORDER BY MIN(s.timestamp) LIMIT 1") suspend fun nextUnsyncedTripId(): String?
     @Query("SELECT * FROM samples WHERE tripId=:tripId AND syncedAt IS NULL ORDER BY timestamp, id LIMIT :limit") suspend fun unsyncedForTrip(tripId: String, limit: Int): List<TelemetrySampleEntity>
     @Query("SELECT COUNT(*) FROM samples WHERE tripId=:tripId AND syncedAt IS NULL") suspend fun unsyncedCountForTrip(tripId: String): Int
 }

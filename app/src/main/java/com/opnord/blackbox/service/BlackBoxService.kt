@@ -151,7 +151,8 @@ class BlackBoxService : LifecycleService() {
                             horizontalAccuracy = location.accuracy.takeIf { location.hasAccuracy() },
                             powerConnected = getSystemService(BatteryManager::class.java).isCharging
                         ))
-                        getSharedPreferences("diagnostics", MODE_PRIVATE).edit().putLong("last_gps", location.time).apply()
+                        getSharedPreferences("diagnostics", MODE_PRIVATE).edit()
+                            .putLong("last_gps", location.time).putString("gps_status", "GPS attivo").apply()
                         }
                     }
                 }
@@ -176,6 +177,7 @@ class BlackBoxService : LifecycleService() {
     private suspend fun stopCollection() {
         collectionGeneration++
         locations.stop()
+        getSharedPreferences("diagnostics", MODE_PRIVATE).edit().putString("gps_status", "GPS fermo").apply()
         sampler?.cancelAndJoin(); sampler = null
         obdJob?.cancelAndJoin(); obdJob = null
         wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null

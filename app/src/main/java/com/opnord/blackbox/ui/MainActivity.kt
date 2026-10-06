@@ -2,10 +2,12 @@ package com.opnord.blackbox.ui
 
 import android.Manifest
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.os.Build
+import android.text.format.DateFormat
 import android.provider.Settings
 import android.text.InputType
 import android.widget.Button
@@ -33,6 +35,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var deviceId: EditText
     private lateinit var bearerToken: EditText
     private lateinit var obdAddress: EditText
+    private val diagnosticsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> runOnUiThread { refresh() } }
     private val bluetoothPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) showPairedObdDevices() else refresh()
     }
@@ -69,6 +72,7 @@ class MainActivity : ComponentActivity() {
         root.addView(Button(this).apply { text = "Scegli dispositivo Bluetooth associato"; setOnClickListener { selectObdDevice() } })
         root.addView(Button(this).apply { text = "Salva adattatore OBD"; setOnClickListener { saveObdConfiguration() } })
         root.addView(Button(this).apply { text = "Salva configurazione e sincronizza"; setOnClickListener { saveSyncConfiguration() } })
+        root.addView(Button(this).apply { text = "Sincronizza ora"; setOnClickListener { TelemetrySyncWorker.retryNow(this@MainActivity); refresh() } })
         root.addView(Button(this).apply { text = "Configura permessi posizione"; setOnClickListener { requestLocationPermissions() } })
         root.addView(Button(this).apply { text = "Avvia logger"; setOnClickListener {
             if (!hasBackgroundLocation()) requestLocationPermissions()
@@ -89,6 +93,14 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onResume() { super.onResume(); refresh() }
+    override fun onStart() {
+        super.onStart()
+        getSharedPreferences("diagnostics", MODE_PRIVATE).registerOnSharedPreferenceChangeListener(diagnosticsListener)
+    }
+    override fun onStop() {
+        getSharedPreferences("diagnostics", MODE_PRIVATE).unregisterOnSharedPreferenceChangeListener(diagnosticsListener)
+        super.onStop()
+    }
 
     private fun requestLocationPermissions() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED ||
@@ -105,9 +117,19 @@ class MainActivity : ComponentActivity() {
 
     private fun refresh() {
         if (!::info.isInitialized) return
+        val diagnostics = getSharedPreferences("diagnostics", MODE_PRIVATE)
+        val lastGps = diagnostics.getLong("last_gps", 0L)
+        val gpsStatus = diagnostics.getString("gps_status", null) ?: if (lastGps > 0) "GPS attivo" else "in attesa di un punto GPS"
+        val syncStatus = diagnostics.getString("sync_status", "mai sincronizzato") ?: "mai sincronizzato"
+        val lastAttempt = diagnostics.getLong("last_sync_attempt", 0L)
+        val lastSuccess = diagnostics.getLong("last_sync_success", 0L)
         info.text = "Permesso posizione: ${if (hasBackgroundLocation()) "sempre" else "mancante"}\n" +
             "Viaggi salvati: $tripCount\nCampioni locali: $sampleCount\nIn attesa di sincronizzazione: $pendingCount\n\n" +
-            "OBD: ${getSharedPreferences("diagnostics", MODE_PRIVATE).getString("obd_status", "non connesso") ?: "non connesso"}\n\n" +
+            "GPS: $gpsStatus${if (lastGps > 0) " · ultimo punto ${DateFormat.format("dd/MM HH:mm:ss", lastGps)}" else ""}\n" +
+            "OBD: ${diagnostics.getString("obd_status", "non connesso") ?: "non connesso"}\n" +
+            "Sincronizzazione: $syncStatus\n" +
+            "Ultimo tentativo: ${if (lastAttempt > 0) DateFormat.format("dd/MM HH:mm", lastAttempt) else "mai"}\n" +
+            "Ultimo successo: ${if (lastSuccess > 0) DateFormat.format("dd/MM HH:mm", lastSuccess) else "mai"}\n\n" +
             "Per registrare a schermo spento, avvia il monitor da questa schermata e imposta Posizione su Consenti sempre nelle impostazioni dell'app. OxygenOS può richiedere di consentire l'attività in background e rimuovere l'ottimizzazione batteria."
     }
 

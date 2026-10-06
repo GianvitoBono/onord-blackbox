@@ -5,6 +5,13 @@ export const time = new Intl.DateTimeFormat('it-IT', { timeStyle: 'short' })
 export const formatDate = (value?: string | null) => value && !Number.isNaN(Date.parse(value)) ? dateTime.format(new Date(value)) : '—'
 export const formatDistance = (meters?: number | null) => meters == null ? '—' : meters >= 1000 ? `${(meters / 1000).toFixed(1)} km` : `${Math.round(meters)} m`
 export const message = (error: unknown) => error instanceof Error ? error.message : 'Errore di caricamento.'
+const tripReasons: Record<string, string> = {
+  power_connected: 'alimentazione collegata',
+  power_disconnected: 'alimentazione scollegata',
+  unexpected_shutdown: 'servizio riavviato',
+  monitor_stopped: 'monitor fermato',
+}
+export const tripReason = (reason?: string | null) => reason ? tripReasons[reason] || reason.replaceAll('_', ' ') : '—'
 export const pages = ['overview', 'journeys', 'explore', 'fleet', 'admin', 'settings'] as const
 export type Page = typeof pages[number]
 export const labels: Record<Page, string> = { overview: 'Panoramica', journeys: 'Viaggi', explore: 'Esplora', fleet: 'Flotta', admin: 'Admin', settings: 'Impostazioni' }

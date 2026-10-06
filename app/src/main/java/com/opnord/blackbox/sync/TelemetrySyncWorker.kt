@@ -26,19 +26,47 @@ import java.util.concurrent.TimeUnit
 
 class TelemetrySyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        val config = SyncConfigurationStore.read(applicationContext) ?: return@withContext Result.success()
-        if (!config.baseUrl.startsWith("https://", ignoreCase = true) || config.token.isBlank()) return@withContext Result.failure()
-        if (!isWifiConnected()) return@withContext Result.retry()
+        val diagnostics = applicationContext.getSharedPreferences("diagnostics", Context.MODE_PRIVATE)
+        fun report(status: String, success: Boolean = false) {
+            val editor = diagnostics.edit().putString("sync_status", status)
+            if (success) editor.putLong("last_sync_success", System.currentTimeMillis())
+            editor.apply()
+        }
+        diagnostics.edit().putLong("last_sync_attempt", System.currentTimeMillis()).apply()
+        val config = SyncConfigurationStore.read(applicationContext) ?: run {
+            report("Configurazione sync mancante")
+            return@withContext Result.success()
+        }
+        if (!config.baseUrl.startsWith("https://", ignoreCase = true) || config.token.isBlank()) {
+            report("URL HTTPS o token non validi")
+            return@withContext Result.failure()
+        }
+        if (!isWifiConnected()) {
+            report("In attesa del Wi-Fi")
+            return@withContext Result.retry()
+        }
 
         val db = BlackBoxDatabase.get(applicationContext)
         val started = SystemClock.elapsedRealtime()
         var completed = 0
         while (completed < MAX_BATCHES_PER_RUN && SystemClock.elapsedRealtime() - started < MAX_RUN_MILLIS) {
-            if (!isWifiConnected()) return@withContext Result.retry()
-            val batch = try { loadOrCreateBatch(db, config.deviceId) } catch (_: Exception) { return@withContext Result.retry() }
-                ?: return@withContext Result.success()
-            val response = try { post(config, batch) } catch (_: Exception) { return@withContext Result.retry() }
+            if (!isWifiConnected()) {
+                report("Wi-Fi perso durante la sincronizzazione")
+                return@withContext Result.retry()
+            }
+            val batch = try { loadOrCreateBatch(db, config.deviceId) } catch (error: Exception) {
+                report("Errore lettura dati: ${error.javaClass.simpleName}")
+                return@withContext Result.retry()
+            } ?: run {
+                report("Nessun dato da inviare")
+                return@withContext Result.success()
+            }
+            val response = try { post(config, batch) } catch (error: Exception) {
+                report("Invio fallito: ${error.javaClass.simpleName}")
+                return@withContext Result.retry()
+            }
             if (response.code !in 200..299) {
+                report("Server HTTP ${response.code}: ${response.body.take(160)}")
                 response.connection.disconnect()
                 return@withContext if (response.code == 408 || response.code == 429 || response.code >= 500) Result.retry() else Result.failure()
             }
@@ -52,22 +80,36 @@ class TelemetrySyncWorker(context: Context, params: WorkerParameters) : Coroutin
                     ack.optInt("obdAccepted", -1) == payload.getJSONArray("obdSamples").length()
             }.getOrDefault(false)
             response.connection.disconnect()
-            if (!accepted) return@withContext Result.retry()
+            if (!accepted) {
+                report("Risposta sync non valida")
+                return@withContext Result.retry()
+            }
 
             try {
                 db.withTransaction {
                     val ids = batch.sampleIds.split(',').filter(String::isNotBlank)
                     if (ids.isNotEmpty()) db.samples().markSynced(ids, System.currentTimeMillis())
-                    if (db.samples().unsyncedCountForTrip(batch.tripId) == 0) db.trips().markSynced(batch.tripId, System.currentTimeMillis())
+                    if (db.samples().unsyncedCountForTrip(batch.tripId) == 0 && db.trips().byId(batch.tripId)?.state == "CLOSED")
+                        db.trips().markSynced(batch.tripId, System.currentTimeMillis())
                     db.pendingBatches().delete(batch.batchId)
                 }
-            } catch (_: Exception) { return@withContext Result.retry() }
+            } catch (error: Exception) {
+                report("Errore salvataggio sync: ${error.javaClass.simpleName}")
+                return@withContext Result.retry()
+            }
+            report("Batch ricevuto dal server", success = true)
             completed++
         }
         val morePending = try {
-            db.pendingBatches().first() != null || db.samples().nextUnsyncedTripId() != null
-        } catch (_: Exception) { return@withContext Result.retry() }
-        if (morePending) enqueueContinuation(applicationContext)
+            db.pendingBatches().first() != null || db.samples().nextUnsyncedTripId() != null || db.trips().nextClosedNeedingSync() != null
+        } catch (error: Exception) {
+            report("Errore coda sync: ${error.javaClass.simpleName}")
+            return@withContext Result.retry()
+        }
+        if (morePending) {
+            report("Altri dati in coda")
+            enqueueContinuation(applicationContext)
+        } else report("In pari")
         Result.success()
     }
 
@@ -78,10 +120,10 @@ class TelemetrySyncWorker(context: Context, params: WorkerParameters) : Coroutin
             // The configured device changed while a batch was queued. Rebuild from unsynced samples.
             db.pendingBatches().delete(pending.batchId)
         }
-        val tripId = db.samples().nextUnsyncedTripId() ?: return@withTransaction null
+        val tripId = db.samples().nextUnsyncedTripId() ?: db.trips().nextClosedNeedingSync() ?: return@withTransaction null
         val samples = db.samples().unsyncedForTrip(tripId, MAX_SAMPLES_PER_BATCH)
         val trip = db.trips().byId(tripId) ?: return@withTransaction null
-        if (samples.isEmpty()) return@withTransaction null
+        if (samples.isEmpty() && trip.state != "CLOSED") return@withTransaction null
         val batchId = UUID.randomUUID().toString()
         val encoded = BatchPayload.encode(deviceId, batchId, trip, samples)
         PendingSyncBatchEntity(batchId, tripId, encoded.payload, encoded.sampleIds.joinToString(",")).also {
@@ -137,6 +179,12 @@ class TelemetrySyncWorker(context: Context, params: WorkerParameters) : Coroutin
             val request = OneTimeWorkRequestBuilder<TelemetrySyncWorker>()
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
             WorkManager.getInstance(context).enqueueUniqueWork(UNIQUE_ONCE, ExistingWorkPolicy.KEEP, request)
+        }
+
+        fun retryNow(context: Context) {
+            val request = OneTimeWorkRequestBuilder<TelemetrySyncWorker>()
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
+            WorkManager.getInstance(context).enqueueUniqueWork(UNIQUE_ONCE, ExistingWorkPolicy.REPLACE, request)
         }
 
         private fun enqueueContinuation(context: Context) {

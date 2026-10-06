@@ -24,7 +24,7 @@ class FusedLocationCollector(context: Context) : LocationCollector {
         if (callback != null) return
         val listener = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
-                result.lastLocation?.let(onLocation)
+                result.locations.forEach(onLocation)
             }
         }
         callback = listener
