@@ -28,6 +28,9 @@ export type DeviceStatus = {
   batteryTempC?: number | null
 }
 
+export type ManagedDevice = { id: string; vehicleId: string; displayName: string; tokenRevokedAt?: string | null }
+export type RotatedDeviceToken = { deviceId: string; deviceToken: string; credentialsFileUpdated?: boolean }
+
 export type GpsSample = {
   sampleId: string
   observedAt: string
@@ -129,6 +132,14 @@ export async function logout(): Promise<void> {
 
 export async function fetchVehicles(signal?: AbortSignal) {
   return unwrapList<Vehicle & Record<string, unknown>>(await request<unknown>('/api/v1/vehicles', { signal })).map(normalizeVehicle)
+}
+
+export async function fetchDevices(signal?: AbortSignal): Promise<ManagedDevice[]> {
+  return unwrapList<ManagedDevice>(await request<unknown>('/api/v1/devices', { signal }))
+}
+
+export async function rotateDeviceToken(deviceId: string, password: string, deviceToken?: string): Promise<RotatedDeviceToken> {
+  return request<RotatedDeviceToken>(`/api/v1/devices/${encodeURIComponent(deviceId)}/rotate-token`, { method: 'POST', body: JSON.stringify({ password, ...(deviceToken ? { deviceToken } : {}) }) })
 }
 
 export async function fetchTrips(vehicleId: string, signal?: AbortSignal) {

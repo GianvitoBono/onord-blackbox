@@ -15,9 +15,11 @@ CARGO_HOME=../.cache/cargo CARGO_TARGET_DIR=../.cache/cargo-target cargo run
 ```
 
 After migrations, run `cargo run --bin provision_dashboard` with `DATABASE_URL` set. This creates a local `admin` user with random password in `.data/dashboard-login.txt` at the repository root (mode `0600`). `cargo run --bin provision_dashboard -- --reset` rotates it and revokes sessions. Passwords are Argon2id hashes in `dashboard_users`; opaque 12-hour session cookies are HttpOnly and SameSite=Strict, with only SHA-256 session hashes stored in `dashboard_sessions`. Cookie `Secure` defaults to true. `DASHBOARD_COOKIE_SECURE=false` is accepted only with loopback `BIND_ADDR` for local HTTP. Public deployment needs HTTPS termination and login rate limiting.
+`cargo run --bin provision_device -- --rotate` rotates the device token to a 20-character random base32 value grouped for manual entry. It updates `devices.token_hash` and the credentials JSON together while retaining device/vehicle IDs. The previous token stops working immediately.
+The dashboard also lists devices and rotates a generated or user-supplied token after account-password confirmation. Custom tokens require 16–128 ASCII letters, digits, hyphens, or underscores. It returns the new token once with `Cache-Control: no-store`, hashes it in the database, and updates the credentials JSON when that file belongs to the device.
 For the isolated `compose.local.yaml` stack, `DASHBOARD_LOCAL_HTTP_CONTAINER=true` additionally allows an internal Docker bind with insecure cookies; only its Caddy port is published to host loopback. Never set this override on an internet-facing deployment.
 
-`/healthz` is process liveness; `/readyz` returns 503 until PostgreSQL responds. Put server-generated device token hashes in `devices.token_hash`: SHA-256 of the exact raw bearer token bytes. The token itself is never stored or logged by this service. Create a matching open row in `device_vehicle_assignments` for each assigned device.
+`/healthz` is process liveness; `/readyz` returns 503 until PostgreSQL responds. Put server-generated device token hashes in `devices.token_hash`: SHA-256 of the exact raw bearer token bytes. Plaintext tokens are kept in the private credentials JSON for bootstrap and never stored in the database or logged. Create a matching open row in `device_vehicle_assignments` for each assigned device.
 
 ## API contract (schema version 1)
 
@@ -81,6 +83,8 @@ Dashboard login endpoints:
 - `POST /api/v1/auth/login` with JSON `{ "username": "admin", "password": "..." }` sets an HttpOnly session cookie and returns `{ "username": "admin" }`.
 - `GET /api/v1/auth/session` returns current username or HTTP 401.
 - `POST /api/v1/auth/logout` revokes session and clears cookie.
+- `GET /api/v1/devices` lists devices without exposing token hashes.
+- `POST /api/v1/devices/{deviceId}/rotate-token` with `{ "password": "...", "deviceToken": "optional-custom-token" }` rechecks the dashboard password, replaces the active device token, and returns `{ "deviceId": "...", "deviceToken": "...", "credentialsFileUpdated": true }` once. Omit `deviceToken` for a generated value. The previous token is invalid immediately.
 
 Dashboard reads require the session cookie and return arrays directly. Device bearer tokens never authenticate dashboard reads.
 

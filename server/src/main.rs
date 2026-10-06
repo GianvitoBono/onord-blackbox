@@ -7,6 +7,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
+use opnord_server::device_token::short_token;
 use opnord_server::password::{hash_password, verify_password};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -15,7 +16,12 @@ use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, Row, Transaction};
 use std::{
     collections::{BTreeMap, HashSet},
+    env,
+    fs::{self, OpenOptions},
+    io::Write,
     net::SocketAddr,
+    os::unix::fs::OpenOptionsExt,
+    path::PathBuf,
     sync::OnceLock,
 };
 use uuid::Uuid;
@@ -717,6 +723,191 @@ async fn logout(State(s): State<App>, headers: HeaderMap) -> Result<Response> {
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DashboardDevice {
+    id: Uuid,
+    vehicle_id: Uuid,
+    display_name: String,
+    token_revoked_at: Option<DateTime<Utc>>,
+}
+
+async fn devices(State(s): State<App>, headers: HeaderMap) -> Result<Json<Vec<DashboardDevice>>> {
+    dashboard(&s.db, &headers).await?;
+    let rows = sqlx::query(
+        "SELECT id,vehicle_id,display_name,token_revoked_at FROM devices ORDER BY created_at DESC",
+    )
+    .fetch_all(&s.db)
+    .await
+    .map_err(db_err)?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(DashboardDevice {
+                id: row.try_get("id").map_err(db_err)?,
+                vehicle_id: row.try_get("vehicle_id").map_err(db_err)?,
+                display_name: row.try_get("display_name").map_err(db_err)?,
+                token_revoked_at: row.try_get("token_revoked_at").map_err(db_err)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(Json)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RotateDeviceTokenBody {
+    password: String,
+    #[serde(rename = "deviceToken")]
+    device_token: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RotatedDeviceToken {
+    device_id: Uuid,
+    device_token: String,
+    credentials_file_updated: bool,
+}
+
+fn update_credentials_file(vehicle_id: Uuid, device_id: Uuid, token: &str) -> bool {
+    let output = PathBuf::from(
+        env::var("DEVICE_CREDENTIALS_FILE")
+            .unwrap_or_else(|_| ".data/device-credentials.json".into()),
+    );
+    let Ok(existing) = fs::read(&output) else {
+        return false;
+    };
+    let Ok(existing) = serde_json::from_slice::<serde_json::Value>(&existing) else {
+        return false;
+    };
+    if existing.get("deviceId").and_then(|value| value.as_str()) != Some(&device_id.to_string()) {
+        return false;
+    }
+    let pending = output.with_extension(format!("rotate-{}.pending", Uuid::new_v4()));
+    let write = (|| -> std::io::Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&pending)?;
+        serde_json::to_writer_pretty(
+            &mut file,
+            &serde_json::json!({
+                "vehicleId": vehicle_id,
+                "deviceId": device_id,
+                "deviceToken": token,
+            }),
+        )?;
+        writeln!(file)?;
+        file.sync_all()?;
+        fs::rename(&pending, &output)?;
+        Ok(())
+    })();
+    if write.is_err() {
+        let _ = fs::remove_file(&pending);
+    }
+    write.is_ok()
+}
+
+async fn rotate_device_token(
+    State(s): State<App>,
+    Path(device_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(body): Json<RotateDeviceTokenBody>,
+) -> Result<Response> {
+    let auth = dashboard(&s.db, &headers).await?;
+    if let Some(token) = &body.device_token {
+        if !(16..=128).contains(&token.len())
+            || !token
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "invalid_device_token",
+                "device token must be 16-128 ASCII letters, digits, hyphens, or underscores",
+            ));
+        }
+    }
+    if body.password.is_empty() || body.password.len() > 1024 {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "invalid_credentials",
+            "invalid password",
+        ));
+    }
+    let encoded: String = sqlx::query_scalar(
+        "SELECT password_hash FROM dashboard_users WHERE username=$1 AND disabled_at IS NULL",
+    )
+    .bind(auth.username)
+    .fetch_optional(&s.db)
+    .await
+    .map_err(db_err)?
+    .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "unauthorized", "login required"))?;
+    let password_ok =
+        tokio::task::spawn_blocking(move || verify_password(&body.password, &encoded))
+            .await
+            .map_err(|_| {
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "password verification failed",
+                )
+            })?;
+    if !password_ok {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "invalid_credentials",
+            "invalid password",
+        ));
+    }
+    let mut tx = s.db.begin().await.map_err(db_err)?;
+    let device = sqlx::query(
+        "SELECT vehicle_id, token_hash FROM devices WHERE id=$1 AND token_revoked_at IS NULL FOR UPDATE",
+    )
+    .bind(device_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(db_err)?
+    .ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "active device not found",
+        )
+    })?;
+    let vehicle_id: Uuid = device.try_get("vehicle_id").map_err(db_err)?;
+    let old_hash: Vec<u8> = device.try_get("token_hash").map_err(db_err)?;
+    let token = body.device_token.unwrap_or_else(short_token);
+    let new_hash = Sha256::digest(token.as_bytes()).to_vec();
+    if new_hash == old_hash {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "device_token_unchanged",
+            "new device token must differ from current token",
+        ));
+    }
+    sqlx::query("UPDATE devices SET token_hash=$2 WHERE id=$1")
+        .bind(device_id)
+        .bind(new_hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+    tx.commit().await.map_err(db_err)?;
+    let updated = update_credentials_file(vehicle_id, device_id, &token);
+    let mut response = Json(RotatedDeviceToken {
+        device_id,
+        device_token: token,
+        credentials_file_updated: updated,
+    })
+    .into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Vehicle {
@@ -1036,6 +1227,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/auth/login", post(login))
         .route("/api/v1/auth/session", get(auth_session))
         .route("/api/v1/auth/logout", post(logout))
+        .route("/api/v1/devices", get(devices))
+        .route(
+            "/api/v1/devices/:device_id/rotate-token",
+            post(rotate_device_token),
+        )
         .route("/api/v1/vehicles", get(vehicles))
         .route("/api/v1/vehicles/:vehicle_id/trips", get(trips))
         .route("/api/v1/trips/:trip_id/gps", get(gps))

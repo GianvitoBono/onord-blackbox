@@ -41,6 +41,8 @@ docker compose --env-file .env.server -f compose.server.yaml exec -T backend cat
 docker compose --env-file .env.server -f compose.server.yaml exec -T backend cat /var/lib/blackbox/device-credentials.json
 ```
 
+Per ruotare il token dispositivo: aprire dashboard → **Blackbox devices**, scegliere token generato o personalizzato, confermare con la password e copiare il token mostrato una sola volta nell'app Android. Il token personalizzato richiede 16–128 caratteri ASCII fra lettere, numeri, `_` e `-`; scegliere un valore difficile da indovinare. Quello vecchio viene invalidato. La dashboard aggiorna anche il JSON delle credenziali se appartiene al dispositivo. In alternativa, usare `docker compose --env-file .env.server -f compose.server.yaml run --rm backend provision_device --rotate`, poi leggere il JSON aggiornato.
+
 Dashboard: `https://<DOMAIN>/`. Nell'app Android: backend URL `https://<DOMAIN>`, `deviceId` e `deviceToken` dal JSON. Le credenziali dashboard non vanno nell'app Android. Per ruotare password dashboard, eseguire `provision_dashboard --reset`; sessioni esistenti vengono revocate.
 
 ## Dati e aggiornamenti

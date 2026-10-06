@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, fetchSession, fetchTripGps, fetchTripMetricCatalog, fetchTripMetricSamples, fetchTrips, fetchVehicles, GpsSample, login, logout, MetricDefinition, MetricSample, Trip, Vehicle } from './api'
+import { ApiError, fetchDevices, fetchSession, fetchTripGps, fetchTripMetricCatalog, fetchTripMetricSamples, fetchTrips, fetchVehicles, GpsSample, login, logout, ManagedDevice, MetricDefinition, MetricSample, rotateDeviceToken, Trip, Vehicle } from './api'
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 const shortDateFormat = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' })
@@ -90,6 +90,16 @@ export default function App() {
   const [authBusy, setAuthBusy] = useState(false)
   const [authError, setAuthError] = useState('')
   const [vehicles, setVehicles] = useState<Vehicle[]>([])
+  const [devices, setDevices] = useState<ManagedDevice[]>([])
+  const [rotationPasswords, setRotationPasswords] = useState<Record<string, string>>({})
+  const [rotationModes, setRotationModes] = useState<Record<string, 'generated' | 'custom'>>({})
+  const [customTokens, setCustomTokens] = useState<Record<string, string>>({})
+  const [rotatingDeviceId, setRotatingDeviceId] = useState('')
+  const [rotationError, setRotationError] = useState('')
+  const [rotationErrorDeviceId, setRotationErrorDeviceId] = useState('')
+  const [rotationNotice, setRotationNotice] = useState('')
+  const [newDeviceToken, setNewDeviceToken] = useState<{ deviceId: string; deviceToken: string } | null>(null)
+  const [copyNotice, setCopyNotice] = useState('')
   const [selectedId, setSelectedId] = useState('')
   const [trips, setTrips] = useState<Trip[]>([])
   const [routeSamples, setRouteSamples] = useState<GpsSample[]>([])
@@ -112,6 +122,17 @@ export default function App() {
   const endSession = useCallback(() => {
     setSignedInUsername('')
     setVehicles([])
+    setDevices([])
+    setRotationPasswords({})
+    setRotationModes({})
+    setCustomTokens({})
+    setRotationPasswords({})
+    setRotatingDeviceId('')
+    setNewDeviceToken(null)
+    setRotationError('')
+    setRotationErrorDeviceId('')
+    setRotationNotice('')
+    setCopyNotice('')
     setTrips([])
     setRouteSamples([])
     setRouteTripId('')
@@ -127,7 +148,9 @@ export default function App() {
     setError('')
     try {
       const vehicleRows = await fetchVehicles(controller.signal)
+      const deviceRows = await fetchDevices(controller.signal)
       setVehicles(vehicleRows)
+      setDevices(deviceRows)
       const nextId = vehicleId && vehicleRows.some((vehicle) => vehicle.id === vehicleId) ? vehicleId : vehicleRows[0]?.id || ''
       setSelectedId(nextId)
       if (!nextId) {
@@ -257,9 +280,45 @@ export default function App() {
   }
 
   function chooseVehicle(id: string) {
+    setRotationPasswords({}); setRotationModes({}); setCustomTokens({}); setNewDeviceToken(null); setRotationError(''); setRotationErrorDeviceId(''); setRotationNotice(''); setCopyNotice('')
     setSelectedId(id)
     if (signedInUsername) void load(id)
   }
+
+  async function handleRotateToken(device: ManagedDevice) {
+    const suppliedPassword = rotationPasswords[device.id] || ''
+    if (!suppliedPassword) { setRotationErrorDeviceId(device.id); setRotationError('Enter your account password to rotate this device token.'); return }
+    const mode = rotationModes[device.id] || 'generated'
+    const suppliedToken = customTokens[device.id] || ''
+    if (mode === 'custom' && !/^[A-Za-z0-9_-]{16,128}$/.test(suppliedToken)) {
+      setRotationErrorDeviceId(device.id); setRotationError('Custom tokens must be 16–128 characters using only ASCII letters, numbers, underscores, or hyphens. Spaces are not allowed.'); return
+    }
+    setRotationPasswords({})
+    setCustomTokens((current) => ({ ...current, [device.id]: '' }))
+    setRotatingDeviceId(device.id); setRotationError(''); setRotationErrorDeviceId(''); setRotationNotice(''); setNewDeviceToken(null); setCopyNotice('')
+    try {
+      const result = await rotateDeviceToken(device.id, suppliedPassword, mode === 'custom' ? suppliedToken : undefined)
+      setNewDeviceToken(result)
+      setRotationNotice(`The previous token is now invalid. Enter this new token in the phone app to reconnect it.${result.credentialsFileUpdated === false ? ' The server credentials JSON was not updated; this token is active, so save it now.' : ''}`)
+    } catch (rotationFailure) {
+      if (rotationFailure instanceof ApiError && rotationFailure.status === 401) { endSession(); return }
+      setRotationErrorDeviceId(device.id)
+      setRotationError(rotationFailure instanceof ApiError && rotationFailure.status === 403 ? 'Incorrect password.' : rotationFailure instanceof ApiError && rotationFailure.status === 409 ? 'Choose a token different from the current one.' : errorMessage(rotationFailure))
+    } finally { setRotatingDeviceId('') }
+  }
+
+  async function copyNewToken() {
+    if (!newDeviceToken) return
+    try { await navigator.clipboard.writeText(newDeviceToken.deviceToken); setCopyNotice('Copied') }
+    catch { setCopyNotice('Copy unavailable. Select and copy the token.') }
+  }
+
+  useEffect(() => {
+    const clearSecrets = () => { setRotationPasswords({}); setCustomTokens({}); setRotationModes({}); setNewDeviceToken(null); setRotationError(''); setRotationErrorDeviceId(''); setRotationNotice(''); setCopyNotice('') }
+    window.addEventListener('hashchange', clearSecrets)
+    window.addEventListener('pagehide', clearSecrets)
+    return () => { window.removeEventListener('hashchange', clearSecrets); window.removeEventListener('pagehide', clearSecrets) }
+  }, [])
 
   async function showRoute(trip: Trip) {
     if (!signedInUsername) return
@@ -331,6 +390,21 @@ export default function App() {
               <article className="metric"><div className="metric-top"><span className="metric-label">Recent journeys</span><span className="metric-icon route-icon" aria-hidden="true">⌁</span></div><div className="metric-value">{loading ? '—' : trips.length}</div><div className="metric-foot">Last 30 recorded trips</div></article>
               <article className="metric"><div className="metric-top"><span className="metric-label">Recorded distance</span><span className="metric-icon distance-icon" aria-hidden="true">↗</span></div><div className="metric-value">{loading ? '—' : <>{totalDistance >= 1000 ? (totalDistance / 1000).toFixed(1) : Math.round(totalDistance)} <small>{totalDistance >= 1000 ? 'km' : 'm'}</small></>}</div><div className="metric-foot">Across the journeys shown</div></article>
               <article className="metric metric-device"><div className="metric-top"><span className="metric-label">Blackbox</span><span className="device-pip" /></div><div className="metric-value device-value">Unavailable</div><div className="metric-foot">Device status is not exposed by the API yet</div></article>
+            </section>
+
+            <section className="devices-section">
+              <div className="section-heading"><div><p className="eyebrow">Device access</p><h2>Blackbox devices</h2></div><span className="count-pill">{devices.length} devices</span></div>
+              {devices.length === 0 ? <div className="device-list-empty">No devices are registered to this account.</div> : <div className="managed-devices">{devices.map((device) => <article className="managed-device" key={device.id}>
+                <div className="managed-device-summary"><span className="managed-device-icon" aria-hidden="true">⌁</span><div><strong>{device.displayName || 'Blackbox device'}</strong><small>{vehicles.find((vehicle) => vehicle.id === device.vehicleId)?.displayName || 'Vehicle'} · {device.id}</small></div><span className={`token-state ${device.tokenRevokedAt ? 'revoked' : ''}`}>{device.tokenRevokedAt ? 'Token revoked' : 'Token active'}</span></div>
+                <form className="rotate-form" onSubmit={(event) => { event.preventDefault(); void handleRotateToken(device) }}>
+                  <label htmlFor={`rotate-mode-${device.id}`}>Token choice</label><select id={`rotate-mode-${device.id}`} value={rotationModes[device.id] || 'generated'} onChange={(event) => { const value = event.target.value as 'generated' | 'custom'; setRotationModes((current) => ({ ...current, [device.id]: value })); setRotationError(''); setRotationErrorDeviceId('') }}><option value="generated">Generate token</option><option value="custom">Set my own token</option></select>
+                  {(rotationModes[device.id] || 'generated') === 'custom' && <><label htmlFor={`custom-token-${device.id}`}>Custom device token</label><input id={`custom-token-${device.id}`} autoComplete="off" value={customTokens[device.id] || ''} onChange={(event) => setCustomTokens((current) => ({ ...current, [device.id]: event.target.value }))} placeholder="16–128 letters, numbers, _ or -" aria-describedby={`token-help-${device.id}`} /><small className="token-help" id={`token-help-${device.id}`}>16–128 ASCII letters, numbers, underscores, or hyphens. No spaces. Choose a long, unpredictable value.</small></>}
+                  <label htmlFor={`rotate-password-${device.id}`}>Account password</label><input id={`rotate-password-${device.id}`} type="password" autoComplete="current-password" value={rotationPasswords[device.id] || ''} onChange={(event) => setRotationPasswords((current) => ({ ...current, [device.id]: event.target.value }))} placeholder="Confirm your password" />
+                  <button className="rotate-button" type="submit" disabled={Boolean(device.tokenRevokedAt) || rotatingDeviceId === device.id}>{rotatingDeviceId === device.id ? 'Rotating…' : 'Rotate token'}</button>
+                </form>
+                {rotationError && rotationErrorDeviceId === device.id && <p className="rotation-error" role="alert">{rotationError}</p>}
+                {newDeviceToken?.deviceId === device.id && <div className="new-token-panel" role="status"><strong>New device token</strong><p>{rotationNotice}</p><div className="token-copy-row"><input aria-label="New device token" readOnly value={newDeviceToken.deviceToken} onFocus={(event) => event.currentTarget.select()} /><button type="button" onClick={() => void copyNewToken()}>{copyNotice || 'Copy token'}</button></div></div>}
+              </article>)}</div>}
             </section>
 
             <section className="journeys-section">

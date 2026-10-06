@@ -22,6 +22,18 @@ docker compose --env-file .env.nginx -f compose.nginx.yaml run --rm backend prov
 docker compose --env-file .env.nginx -f compose.nginx.yaml run --rm backend provision_device
 ```
 
+Per sostituire il token dispositivo, aprire la dashboard, sezione **Blackbox devices**, scegliere fra token generato (20 caratteri base32, raggruppati in quattro blocchi) e token personalizzato, inserire la password dell'account e scegliere **Rotate token**. Il token personalizzato deve avere 16–128 caratteri ASCII fra lettere, numeri, `_` e `-`, senza spazi. Usare un valore difficile da indovinare. Copiare il token mostrato una sola volta nell'app Nord. La rotazione aggiorna anche il JSON delle credenziali quando il file appartiene a quel dispositivo.
+
+In alternativa, dopo aver aggiornato l'immagine backend, usare la CLI:
+
+```sh
+docker compose --env-file .env.nginx -f compose.nginx.yaml up -d --build
+docker compose --env-file .env.nginx -f compose.nginx.yaml run --rm backend provision_device --rotate
+docker compose --env-file .env.nginx -f compose.nginx.yaml exec -T backend cat /var/lib/blackbox/device-credentials.json
+```
+
+Il comando controlla che il token del file corrisponda a quello attivo nel database, aggiorna hash e file credenziali, mantiene `deviceId`/`vehicleId`. Token precedente smette subito di funzionare: inserire il nuovo `deviceToken` nell'app Nord. Non modificare JSON manualmente.
+
 ## Blocco Nginx
 
 Dentro il `server { listen 443 ssl; server_name blackbox.example.com; ... }` già esistente, aggiungere [nginx-location.conf](../deploy/nginx-location.conf). Se il sito contiene altri `location`, usare un sottodominio dedicato: questa regola inoltra l'intero sito, mantenendo stesso origin per dashboard e API.
