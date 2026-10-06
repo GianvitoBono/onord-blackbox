@@ -8,7 +8,7 @@ Stato al 2026-10-06. Le caselle indicano lavoro completato nel repository, non u
 - [x] Rilevatore GPS di movimento/sosta, persistenza trip/campioni batteria ed eventi sosta Room v5.
 - [x] SDK e wrapper disponibili; `:app:testDebugUnitTest :app:assembleDebug` riusciti con cache sul disco esterno.
 - [x] Permessi runtime, avvio monitor da Activity visibile e recupero viaggio attivo recente dopo restart; impossibile garantire cold start dopo force-stop su Android stock.
-- [x] Confermati in precedenza via ADB modello AC2003, device Nord, Android 12/API 31. APK di questa revisione ancora da installare: telefono non collegato ora.
+- [x] Confermato via ADB modello AC2003, device Nord, Android 12/API 31; telefono nuovamente collegato via USB il 6 ottobre.
 - [ ] Verificare ordinamento eventi concorrenti, sopravvivenza servizio e restart dopo kill sul telefono.
 - [x] GPS Fused Location: richiesta 15 s in attesa movimento, 1 Hz in viaggio; precisione, quota, heading e velocità salvati.
 - [ ] Calibrare con percorso reale soglie movimento, sosta 2 min e chiusura 90 min; verificare riavvio durante sosta.
@@ -41,6 +41,7 @@ Stato al 2026-10-06. Le caselle indicano lavoro completato nel repository, non u
 ## P2 — OBD
 
 - [x] Scelta iniziale BT classico SPP, permesso Bluetooth e selettore dispositivi già associati.
+- [ ] **Pairing OBD ripetuto:** a ogni collegamento l'OBDII richiede di nuovo il PIN. Sul Nord, `dumpsys bluetooth_manager` mostra il dispositivo attualmente `BONDED` ma tre sequenze di associazione nella giornata. L'app usa `createRfcommSocketToServiceRecord` e non chiama `createBond`/`removeBond`. Acquisire log Bluetooth al prossimo distacco/ricollegamento, verificare persistenza della chiave su telefono e adattatore e distinguere perdita del bond da semplice richiesta di autorizzazione. Criterio: tre cicli di spegnimento/riaccensione adattatore e un riavvio telefono, riconnessione SPP senza reinserire PIN né perdere telemetria.
 - [x] `ObdTransport` astratto e fake; ELM327 init, PID discovery e riconnessione. Timeout lettura socket da verificare con adattatore reale.
 - [x] Parser per PID standard e bitmap supporto con test unitari; PID non supportati registrati come stato.
 - [x] Persistenza locale letture PID con ID e timestamp; payload compatibile con contratto P1. Migrazione Room v3 e schema generato.
