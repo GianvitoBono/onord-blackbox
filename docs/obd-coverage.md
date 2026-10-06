@@ -24,6 +24,8 @@ Car Scanner mostra molti parametri perché combina PID standard, profili specifi
 
 I segnali produttore, soprattutto DPF, rigenerazioni, pressione turbo richiesta/effettiva, marcia, correzioni iniettori e dati di altre centraline, richiedono richieste diagnostiche e formule specifiche Alfa/Fiat. Aggiungere un profilo Giulietta separato solo dopo acquisizione non invasiva delle risposte e verifica di indirizzi, scaling, unità e disponibilità. Il normale OBD emissioni non garantisce questi dati; inventare ID o formule produce grafici falsi. Nessun comando di scrittura/attuazione ECU è previsto.
 
+Ricerca di richieste Mode 22 candidate, con fonti e limiti: [spike PID estesi Giulietta](giulietta-extended-pid-spike.md).
+
 La dashboard deve mostrare catalogo effettivamente raccolto, unità, sorgente e assenza dati. Un valore calcolato deve essere identificabile come tale.
 
 Riferimenti: [SAE J1979](https://saemobilus.sae.org/standards/j1979da_201702-j1979-da-digital-annex-e-e-diagnostic-test-modes), [tabella PID e formule](https://www.csselectronics.com/pages/obd2-pid-table-on-board-diagnostics-j1979).
