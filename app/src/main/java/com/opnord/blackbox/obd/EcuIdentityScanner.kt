@@ -73,20 +73,52 @@ class EcuIdentityScanner(private val timeoutMs: Long = 6_000) {
             // Keep spaces and CAN headers so simultaneous ECU replies can be separated safely.
             require(command(transport, "ATS1").contains("OK", ignoreCase = true)) { "Adattatore non accetta ATS1" }
             require(command(transport, "ATH1").contains("OK", ignoreCase = true)) { "Adattatore non accetta ATH1" }
+            // Clones may retain altered flow-control settings across sessions.
+            command(transport, "ATCFC1")
+            command(transport, "ATCAF1")
+            val functionalReplies = listOf("0900", "0904", "0906", "090A")
+                .associateWith { request ->
+                    try { command(transport, request).trimReply() }
+                    catch (e: CancellationException) { throw e }
+                    catch (e: Exception) { "ERROR: ${e.message}" }
+                }
+            val responders = parseCanPayloads(functionalReplies["0900"].orEmpty(), "0900").keys
+                .filter { it.matches(Regex("18DAF1[0-9A-F]{2}")) }
             val reads = listOf("0900", "0904", "0906", "090A").map { request ->
                 try {
-                    val raw = command(transport, request).trimReply()
-                    val payloads = parseCanPayloads(raw, request)
-                    val decoded = payloads.mapValues { (_, bytes) -> decode(request, bytes) }
-                        .filterValues { it.isNotBlank() }
+                    val raw = StringBuilder(functionalReplies[request].orEmpty())
+                    val decoded = parseCanPayloads(raw.toString(), request).mapValues { (_, bytes) -> decode(request, bytes) }
+                        .filterValues { it.isNotBlank() }.toMutableMap()
+                    // Request each responding ECU physically when functional replies stop at First Frame.
+                    if (request != "0900" && responders.isNotEmpty()) {
+                        responders.filterNot(decoded::containsKey).forEach { ecu ->
+                            val requestHeader = "18DA${ecu.takeLast(2)}F1"
+                            try {
+                                if (command(transport, "ATSH$requestHeader").contains("OK", ignoreCase = true)) {
+                                    val targeted = command(transport, request).trimReply()
+                                    raw.append("\nATSH$requestHeader\n").append(targeted)
+                                    parseCanPayloads(targeted, request)[ecu]?.let { bytes ->
+                                        decode(request, bytes).takeIf(String::isNotBlank)?.let { decoded[ecu] = it }
+                                    }
+                                }
+                            } catch (e: CancellationException) { throw e }
+                            catch (e: Exception) { raw.append("\nATSH$requestHeader: ${e.message ?: "lettura fallita"}") }
+                        }
+                    }
                     val unsupported = raw.contains("NO DATA", true) || raw.contains("?", true)
+                    val incomplete = hasIncompleteMultiFrame(raw.toString())
                     val status = when {
                         decoded.isNotEmpty() -> DiagnosticStatus.SUCCESS
+                        incomplete -> DiagnosticStatus.MALFORMED
                         unsupported -> DiagnosticStatus.UNSUPPORTED
                         else -> DiagnosticStatus.MALFORMED
                     }
-                    EcuIdentityRead(request, status, raw, decoded,
-                        if (decoded.isEmpty()) if (unsupported) "nessuna risposta" else "risposta grezza disponibile" else null)
+                    EcuIdentityRead(request, status, raw.toString(), decoded,
+                        if (decoded.isEmpty()) when {
+                            incomplete -> "risposta ISO-TP incompleta: mancano i frame successivi"
+                            unsupported -> "nessuna risposta"
+                            else -> "risposta grezza disponibile"
+                        } else null)
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { EcuIdentityRead(request, DiagnosticStatus.ERROR, "", detail = e.message ?: "lettura fallita") }
             }
@@ -106,25 +138,37 @@ class EcuIdentityScanner(private val timeoutMs: Long = 6_000) {
         private val header = Regex("^(?:[0-9A-F]{3}|[0-9A-F]{8})$", RegexOption.IGNORE_CASE)
         private val hexBytes = Regex("^[0-9A-F]{2,}$", RegexOption.IGNORE_CASE)
 
-        /** ELM CAN formatting with ATH1/ATS1: one ISO-TP stream per response CAN ID. */
-        internal fun parseCanPayloads(raw: String, request: String): Map<String, List<Int>> {
+        /** ELM may render a 29-bit ID as 18DAF101 or as four spaced bytes. */
+        private fun parseFrames(raw: String): Map<String, List<List<Int>>> {
             val frames = linkedMapOf<String, MutableList<List<Int>>>()
             raw.lines().forEach { line ->
                 val parts = line.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
-                if (parts.size < 2 || !header.matches(parts[0])) return@forEach
-                val bytes = parts.drop(1).flatMap { part ->
+                val (ecu, start) = when {
+                    parts.size >= 2 && header.matches(parts[0]) -> parts[0].uppercase() to 1
+                    parts.size >= 5 && parts.take(4).all { it.matches(Regex("[0-9A-Fa-f]{2}")) } -> parts.take(4).joinToString("").uppercase() to 4
+                    else -> return@forEach
+                }
+                val bytes = parts.drop(start).flatMap { part ->
                     if (!hexBytes.matches(part) || part.length % 2 != 0) emptyList()
                     else part.chunked(2).map { it.toInt(16) }
                 }
-                if (bytes.isNotEmpty()) frames.getOrPut(parts[0].uppercase()) { mutableListOf() }.add(bytes)
+                if (bytes.isNotEmpty()) frames.getOrPut(ecu) { mutableListOf() }.add(bytes)
             }
+            return frames
+        }
+
+        internal fun parseCanPayloads(raw: String, request: String): Map<String, List<Int>> {
             val mode = request.substring(0, 2).toInt(16) + 0x40
             val pid = request.substring(2, 4).toInt(16)
-            return frames.mapNotNull { (ecu, chunks) ->
+            return parseFrames(raw).mapNotNull { (ecu, chunks) ->
                 val payload = reassemble(chunks) ?: return@mapNotNull null
                 if (payload.size < 3 || payload[0] != mode || payload[1] != pid) return@mapNotNull null
                 ecu to payload.drop(2)
             }.toMap()
+        }
+
+        private fun hasIncompleteMultiFrame(raw: String): Boolean = parseFrames(raw).values.any { chunks ->
+            chunks.firstOrNull()?.firstOrNull()?.let { it ushr 4 == 1 && reassemble(chunks) == null } == true
         }
 
         private fun reassemble(frames: List<List<Int>>): List<Int>? {

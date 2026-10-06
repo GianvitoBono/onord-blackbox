@@ -2,7 +2,7 @@
 
 Logger Android offline-first per OnePlus Nord originale AC2003 (Android 12, API 31), API Rust/TimescaleDB e dashboard React/TypeScript. GPS, sync Wi-Fi e lettura OBD-II standard via Bluetooth classico hanno una prima implementazione compilabile. APK debug installato e avviato sul telefono; logging GPS/OBD in auto ancora da verificare.
 
-APK debug aggiornato: [opnord-blackbox-0.1.5-debug.apk](releases/opnord-blackbox-0.1.5-debug.apk) ([SHA-256](releases/opnord-blackbox-0.1.5-debug.apk.sha256)). Aprire il file sul telefono per aggiornare l'app. Per vedere l'identificazione ECU in **Flotta** aggiornare anche backend e frontend: il backend applica automaticamente la migrazione 0009 all'avvio.
+APK debug aggiornato: [opnord-blackbox-0.1.6-debug.apk](releases/opnord-blackbox-0.1.6-debug.apk) ([SHA-256](releases/opnord-blackbox-0.1.6-debug.apk.sha256)). Aprire il file sul telefono per aggiornare l'app. La scansione ECU riconosce header CAN a 29 bit separati, abilita flow control e riprova richieste Mode 09 per singola ECU quando la risposta funzionale è incompleta. Il report indica quando mancano frame ISO-TP; questi valori restano da verificare sul veicolo dopo la nuova scansione.
 
 - [Taskboard e criteri di completamento](docs/taskboard.md)
 - [Architettura Android](docs/architecture.md)
