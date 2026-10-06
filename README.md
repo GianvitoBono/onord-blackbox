@@ -11,6 +11,7 @@ Logger Android offline-first per OnePlus Nord originale AC2003 (Android 12, API 
 - [Milestone originali](docs/milestones.md)
 - [Deploy server con Docker Compose](docs/deploy-server.md)
 - [Compose completo locale via HTTP](docs/compose-local.md)
+- [Deploy con Nginx esistente](docs/deploy-nginx.md)
 
 Struttura: `app/` Android; `server/` Rust API; `web/` React/TypeScript; `compose.yaml` TimescaleDB locale. Il contratto JSON esatto è in [server/README.md](server/README.md).
 Per server Linux usare `compose.server.yaml`: include API, TimescaleDB/PostGIS e dashboard HTTPS; configurazione in `.env.server` separata dallo sviluppo locale.

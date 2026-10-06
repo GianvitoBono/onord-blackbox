@@ -2,6 +2,8 @@
 
 `compose.server.yaml` avvia TimescaleDB/PostGIS, API Rust e dashboard React servita da Caddy. Solo porte 80/443 sono pubbliche. Database e API restano sulla rete privata Docker. Caddy gestisce HTTPS automatico per un dominio pubblico: DNS del dominio deve puntare al server e porte 80/443 devono essere raggiungibili. Le credenziali dashboard e device restano in un volume privato; dati PostgreSQL e certificati hanno volumi separati.
 
+Se il server usa già Nginx per HTTPS, usare invece [compose.nginx.yaml e blocco Nginx](deploy-nginx.md), evitando conflitti sulle porte 80/443.
+
 ## Primo avvio
 
 Sul server Linux con Docker Engine e Compose plugin:
