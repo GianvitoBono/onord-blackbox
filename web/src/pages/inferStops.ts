@@ -1,9 +1,9 @@
 import type { GpsSample, TripEvent } from '../api'
 
-const MIN_STOP_MS = 2 * 60_000
+const MIN_STOP_MS = 10_000
 const MAX_FIX_GAP_MS = 60_000
-const MAX_ACCURACY_M = 35
-const STATIONARY_RADIUS_M = 40
+const MAX_ACCURACY_M = 20
+const STATIONARY_RADIUS_M = 25
 const DEPARTURE_DISTANCE_M = 65
 
 function meters(a: GpsSample, b: GpsSample) {
@@ -32,7 +32,7 @@ export function inferStops(samples: GpsSample[]): TripEvent[] {
     }
     const distance = meters(anchor, point)
     const speed = point.speedMps
-    if (distance <= STATIONARY_RADIUS_M && (speed == null || speed <= 2)) {
+    if (distance <= STATIONARY_RADIUS_M && (speed == null || speed <= 0.8)) {
       lastStill = point
       stillCount++
       continue

@@ -10,6 +10,16 @@ data class StopBoundary(
     val longitude: Double
 )
 
+data class ObdMotionEvidence(
+    val speedKmh: Double? = null,
+    val speedAt: Long = 0L,
+    val acceleratorPct: Double? = null,
+    val acceleratorAt: Long = 0L
+) {
+    fun recentSpeed(at: Long): Double? = speedKmh?.takeIf { speedAt > 0 && kotlin.math.abs(at - speedAt) <= 10_000L }
+    fun recentAccelerator(at: Long): Double? = acceleratorPct?.takeIf { acceleratorAt > 0 && kotlin.math.abs(at - acceleratorAt) <= 10_000L }
+}
+
 data class JourneyDecision(
     val startTrip: Boolean = false,
     val stopStart: StopBoundary? = null,
@@ -23,10 +33,11 @@ class JourneyDetector(
     openStop: StopBoundary? = null
 ) {
     companion object {
-        const val STOP_CONFIRM_MS = 2 * 60_000L
+        const val STOP_CONFIRM_MS = 10_000L
         const val TRIP_END_IDLE_MS = 90 * 60_000L
         private const val MAX_MOTION_ACCURACY_M = 35f
         private const val IDLE_ANCHOR_MAX_AGE_MS = 5 * 60_000L
+        private const val STATIONARY_RADIUS_M = 25f
     }
 
     private var tripActive = initialTripActive
@@ -38,8 +49,9 @@ class JourneyDetector(
     private var stationaryPoint: Location? = openStop?.let { point(it) }
     private var currentStop = openStop
     private var departureCandidate: Location? = null
+    private var stationaryPedalPct: Double? = null
 
-    fun observe(location: Location): JourneyDecision {
+    fun observe(location: Location, obd: ObdMotionEvidence = ObdMotionEvidence()): JourneyDecision {
         if (location.time <= lastObservedAt) return JourneyDecision()
         lastObservedAt = location.time
         if (location.hasAccuracy() && location.accuracy > MAX_MOTION_ACCURACY_M) return JourneyDecision()
@@ -67,6 +79,7 @@ class JourneyDetector(
             motionAnchor = Location(location)
             stationarySince = null
             stationaryPoint = null
+            stationaryPedalPct = null
             return JourneyDecision(startTrip = true)
         }
 
@@ -76,8 +89,18 @@ class JourneyDetector(
             return JourneyDecision()
         }
         val distance = anchor.distanceTo(location)
-        val moving = distance >= 60f ||
-            (distance >= 20f && location.hasSpeed() && location.speed >= 3f)
+        val obdSpeed = obd.recentSpeed(location.time)
+        val gpsSpeed = location.speed.takeIf { location.hasSpeed() }
+        val obdStopped = obdSpeed != null && obdSpeed <= 1.0
+        val pedalRise = stationaryPedalPct?.let { baseline ->
+            obd.recentAccelerator(location.time)?.let { it - baseline >= 8.0 }
+        } == true
+        val moving = when {
+            obdSpeed != null && obdSpeed >= 4.0 -> (gpsSpeed != null && gpsSpeed >= 1f) || distance >= 15f
+            pedalRise && obdSpeed != null && obdSpeed >= 2.0 && gpsSpeed != null && gpsSpeed >= 0.8f -> true
+            obdStopped && (gpsSpeed == null || gpsSpeed <= 1.5f) -> false
+            else -> distance >= 60f || (distance >= 20f && gpsSpeed != null && gpsSpeed >= 3f)
+        }
         if (moving) {
             if (currentStop != null) {
                 val candidate = departureCandidate
@@ -99,18 +122,36 @@ class JourneyDetector(
                 motionAnchor = Location(location)
                 stationarySince = null
                 stationaryPoint = null
+                stationaryPedalPct = null
                 return JourneyDecision(stopEnd = ended)
             }
             motionAnchor = Location(location)
             stationarySince = null
             stationaryPoint = null
+            stationaryPedalPct = null
             return JourneyDecision()
         }
         departureCandidate = null
 
+        val stationaryAnchor = stationaryPoint
+        val stationary = if (obdStopped) {
+            stationaryAnchor == null || stationaryAnchor.distanceTo(location) <= 50f
+        } else {
+            obdSpeed == null && (!location.hasAccuracy() || location.accuracy <= 20f) &&
+                (gpsSpeed == null || gpsSpeed <= 0.8f) &&
+                (stationaryAnchor == null || stationaryAnchor.distanceTo(location) <= STATIONARY_RADIUS_M)
+        }
+        if (!stationary) {
+            stationarySince = null
+            stationaryPoint = null
+            stationaryPedalPct = null
+            return JourneyDecision()
+        }
+
         val since = stationarySince ?: location.time.also {
             stationarySince = it
             stationaryPoint = Location(location)
+            stationaryPedalPct = obd.recentAccelerator(location.time)
         }
         if (currentStop == null && location.time - since >= STOP_CONFIRM_MS) {
             val point = stationaryPoint ?: location
@@ -127,6 +168,7 @@ class JourneyDetector(
             currentStop = null
             stationarySince = null
             stationaryPoint = null
+            stationaryPedalPct = null
             idleAnchor = Location(location)
             movingFixes = 0
             return JourneyDecision(stopEnd = ended, closeTrip = true)

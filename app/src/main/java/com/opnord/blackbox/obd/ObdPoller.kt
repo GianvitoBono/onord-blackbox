@@ -47,7 +47,7 @@ class ObdPoller(
                 retry = 0
                 val supported = discover()
                 // Frequent driving signals first; slower/less useful values rotate in bounded batches.
-                val priority = listOf(ObdPid.RPM, ObdPid.SPEED, ObdPid.ENGINE_LOAD, ObdPid.THROTTLE,
+                val priority = listOf(ObdPid.RPM, ObdPid.SPEED, ObdPid.ACCELERATOR_PEDAL_D, ObdPid.ENGINE_LOAD, ObdPid.THROTTLE,
                     ObdPid.MAP, ObdPid.BAROMETRIC_PRESSURE, ObdPid.DEMANDED_TORQUE, ObdPid.ACTUAL_TORQUE)
                 val known = supported.mapNotNull(ObdPid::fromCode)
                 val requested = priority.filter { it.code in supported } + known.filter { it !in priority }

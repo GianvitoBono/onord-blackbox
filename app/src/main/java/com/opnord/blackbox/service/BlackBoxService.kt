@@ -28,6 +28,7 @@ class BlackBoxService : LifecycleService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var db: BlackBoxDatabase
     private var detector = JourneyDetector()
+    @Volatile private var obdMotion = ObdMotionEvidence()
     private val lifecycleMutex = Mutex()
     private val locationQueue = Channel<Location>(Channel.UNLIMITED)
     private val recentLocations = ArrayDeque<Location>()
@@ -154,7 +155,7 @@ class BlackBoxService : LifecycleService() {
         while (recentLocations.isNotEmpty() && location.time - recentLocations.first().time > 120_000L)
             recentLocations.removeFirst()
 
-        val decision = detector.observe(location)
+        val decision = detector.observe(location, obdMotion)
         if (decision.startTrip) {
             startTrip()
             return
@@ -221,6 +222,7 @@ class BlackBoxService : LifecycleService() {
     }
 
     private fun startActiveCollection(forTripId: String) {
+        obdMotion = ObdMotionEvidence()
         if (wakeLock == null) {
             wakeLock = (getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "VehicleBlackbox:logging").apply { setReferenceCounted(false); acquire() })
         }
@@ -239,6 +241,7 @@ class BlackBoxService : LifecycleService() {
     }
 
     private suspend fun stopActiveCollection() {
+        obdMotion = ObdMotionEvidence()
         sampler?.cancelAndJoin(); sampler = null
         obdJob?.cancelAndJoin(); obdJob = null
         getSharedPreferences("diagnostics", MODE_PRIVATE).edit().putString("obd_status", "in attesa di un viaggio attivo").apply()
@@ -258,6 +261,15 @@ class BlackBoxService : LifecycleService() {
                 if (device == null) return@launch
                 ObdPoller(BluetoothSppObdTransport(device), onReading = { reading ->
                     val v = reading.values
+                    val speed = v[ObdPid.SPEED]
+                    val accelerator = v[ObdPid.ACCELERATOR_PEDAL_D] ?: v[ObdPid.ACCELERATOR_PEDAL_E] ?: v[ObdPid.ACCELERATOR_PEDAL]
+                    val previousMotion = obdMotion
+                    obdMotion = previousMotion.copy(
+                        speedKmh = speed ?: previousMotion.speedKmh,
+                        speedAt = if (speed != null) reading.observedAt else previousMotion.speedAt,
+                        acceleratorPct = accelerator ?: previousMotion.acceleratorPct,
+                        acceleratorAt = if (accelerator != null) reading.observedAt else previousMotion.acceleratorAt
+                    )
                     db.samples().insert(TelemetrySampleEntity(
                         UUID.randomUUID().toString(), forTripId, reading.observedAt,
                         powerConnected = getSystemService(BatteryManager::class.java).isCharging,
