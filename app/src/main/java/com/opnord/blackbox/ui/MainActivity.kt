@@ -13,6 +13,7 @@ import android.text.InputType
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
@@ -42,46 +43,58 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(32, 40, 32, 24) }
-        root.addView(TextView(this).apply { text = "Vehicle Blackbox"; textSize = 25f })
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(32, 40, 32, 24)
+        }
+        content.addView(TextView(this).apply { text = "Vehicle Blackbox"; textSize = 25f })
         info = TextView(this).apply { textSize = 16f; setPadding(0, 22, 0, 18) }
-        root.addView(info)
+        content.addView(info)
+        content.addView(TextView(this).apply { text = "Connessione e dispositivo"; textSize = 20f; setPadding(0, 18, 0, 8) })
+        content.addView(TextView(this).apply {
+            text = "L'ID dispositivo è un UUID stabile, diverso dal nome del mezzo. Se lo cambi, i batch locali vengono rigenerati con il nuovo ID; il server riassocia i viaggi dello stesso mezzo."
+        })
         backendUrl = EditText(this).apply {
             hint = "Backend URL HTTPS (es. https://blackbox.example)"
             setText(getSharedPreferences("sync_configuration", MODE_PRIVATE).getString("base_url", ""))
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
         }
         deviceId = EditText(this).apply {
-            hint = "UUID dispositivo"
+            hint = "ID dispositivo (UUID stabile)"
             setText(SyncConfigurationStore.deviceId(this@MainActivity))
             inputType = InputType.TYPE_CLASS_TEXT
         }
         bearerToken = EditText(this).apply {
-            hint = "Token dispositivo (archiviato cifrato)"
+            hint = "Token dispositivo (vuoto = conserva quello salvato)"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
-        root.addView(backendUrl)
-        root.addView(deviceId)
-        root.addView(bearerToken)
+        content.addView(backendUrl)
+        content.addView(deviceId)
+        content.addView(bearerToken)
         obdAddress = EditText(this).apply {
             hint = "Indirizzo MAC adattatore OBD Bluetooth associato (opzionale)"
             setText(getSharedPreferences("obd_configuration", MODE_PRIVATE).getString("address", ""))
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
         }
-        root.addView(obdAddress)
-        root.addView(Button(this).apply { text = "Scegli dispositivo Bluetooth associato"; setOnClickListener { selectObdDevice() } })
-        root.addView(Button(this).apply { text = "Salva adattatore OBD"; setOnClickListener { saveObdConfiguration() } })
-        root.addView(Button(this).apply { text = "Salva configurazione e sincronizza"; setOnClickListener { saveSyncConfiguration() } })
-        root.addView(Button(this).apply { text = "Sincronizza ora"; setOnClickListener { TelemetrySyncWorker.retryNow(this@MainActivity); refresh() } })
-        root.addView(Button(this).apply { text = "Configura permessi posizione"; setOnClickListener { requestLocationPermissions() } })
-        root.addView(Button(this).apply { text = "Avvia logger"; setOnClickListener {
+        content.addView(obdAddress)
+        content.addView(Button(this).apply { text = "Scegli dispositivo Bluetooth associato"; setOnClickListener { selectObdDevice() } })
+        content.addView(Button(this).apply { text = "Salva adattatore OBD"; setOnClickListener { saveObdConfiguration() } })
+        content.addView(Button(this).apply { text = "Salva configurazione e sincronizza"; setOnClickListener { saveSyncConfiguration() } })
+        content.addView(Button(this).apply { text = "Sincronizza ora"; setOnClickListener { TelemetrySyncWorker.retryNow(this@MainActivity); refresh() } })
+        content.addView(Button(this).apply { text = "Configura permessi posizione"; setOnClickListener { requestLocationPermissions() } })
+        content.addView(Button(this).apply { text = "Avvia logger"; setOnClickListener {
             if (!hasBackgroundLocation()) requestLocationPermissions()
             else ContextCompat.startForegroundService(this@MainActivity, Intent(this@MainActivity, BlackBoxService::class.java).setAction(BlackBoxService.ACTION_START_MONITOR))
         } })
-        root.addView(Button(this).apply { text = "Ferma monitor"; setOnClickListener {
+        content.addView(Button(this).apply { text = "Ferma monitor"; setOnClickListener {
             startService(Intent(this@MainActivity, BlackBoxService::class.java).setAction(BlackBoxService.ACTION_STOP_MONITOR))
         } })
-        setContentView(root)
+        val scrollView = ScrollView(this).apply {
+            isFillViewport = true
+            clipToPadding = false
+            addView(content)
+        }
+        setContentView(scrollView)
         val db = BlackBoxDatabase.get(this)
         lifecycleScope.launch {
             combine(db.trips().countFlow(), db.samples().countFlow(), db.samples().unsyncedCountFlow()) { trips, samples, pending -> Triple(trips, samples, pending) }
@@ -146,14 +159,16 @@ class MainActivity : ComponentActivity() {
             info.text = "L'ID dispositivo deve essere un UUID valido."
             return
         }
-        if (token.isBlank()) {
-            info.text = "Inserisci il token bearer del dispositivo. Verrà cifrato tramite Android Keystore."
+        val saved = SyncConfigurationStore.read(this)
+        if (token.isBlank() && (saved == null || saved.token.isBlank() || saved.deviceId != id)) {
+            info.text = "Inserisci il token del nuovo dispositivo. Verrà cifrato tramite Android Keystore."
             return
         }
         SyncConfigurationStore.save(this, url, id, token)
         bearerToken.text.clear()
         TelemetrySyncWorker.schedule(this)
-        info.text = "Configurazione salvata. Sincronizzazione pianificata solo su Wi-Fi.\n" +
+        TelemetrySyncWorker.retryNow(this)
+        info.text = "Configurazione salvata. I batch locali useranno l'ID attuale; sincronizzazione avviata su Wi-Fi.\n" +
             "Viaggi salvati: $tripCount\nCampioni locali: $sampleCount\nIn attesa di sincronizzazione: $pendingCount"
     }
 

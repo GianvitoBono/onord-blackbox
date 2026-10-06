@@ -505,20 +505,37 @@ async fn ingest(
         ));
     }
     sqlx::query("INSERT INTO trips(id,device_id,vehicle_id,started_at,ended_at,start_reason,end_reason,distance_gps_m,distance_obd_m) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(id) DO NOTHING").bind(batch.trip.id).bind(batch.device_id).bind(vehicle_id).bind(batch.trip.started_at).bind(batch.trip.ended_at).bind(&batch.trip.start_reason).bind(&batch.trip.end_reason).bind(batch.trip.distance_gps_m).bind(batch.trip.distance_obd_m).execute(&mut *tx).await.map_err(db_err)?;
-    let trip_owner = sqlx::query("SELECT device_id, vehicle_id FROM trips WHERE id=$1")
+    let trip_owner = sqlx::query("SELECT device_id, vehicle_id FROM trips WHERE id=$1 FOR UPDATE")
         .bind(batch.trip.id)
         .fetch_optional(&mut *tx)
         .await
         .map_err(db_err)?;
-    if trip_owner.as_ref().is_none_or(|r| {
-        r.try_get::<Uuid, _>("device_id").ok() != Some(batch.device_id)
-            || r.try_get::<Uuid, _>("vehicle_id").ok() != Some(vehicle_id)
-    }) {
+    let Some(trip_owner) = trip_owner else {
         return Err(err(
             StatusCode::CONFLICT,
             "trip_conflict",
-            "trip id belongs to another device",
+            "trip not found after insert",
         ));
+    };
+    let stored_device_id: Uuid = trip_owner.try_get("device_id").map_err(db_err)?;
+    let stored_vehicle_id: Uuid = trip_owner.try_get("vehicle_id").map_err(db_err)?;
+    if stored_vehicle_id != vehicle_id {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "trip_conflict",
+            "trip belongs to another vehicle",
+        ));
+    }
+    if stored_device_id != batch.device_id {
+        // Device ID can change on the logger while offline. A valid token and
+        // current assignment to the same vehicle authorize adoption of its trip.
+        // Existing samples keep their source device_id for provenance.
+        sqlx::query("UPDATE trips SET device_id=$2 WHERE id=$1")
+            .bind(batch.trip.id)
+            .bind(batch.device_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
     }
     let stored_started_at: DateTime<Utc> =
         sqlx::query_scalar("SELECT started_at FROM trips WHERE id=$1")
