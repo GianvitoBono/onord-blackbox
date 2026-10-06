@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.Flow
     @Query("SELECT s.tripId FROM samples AS s WHERE s.syncedAt IS NULL GROUP BY s.tripId ORDER BY MIN(s.timestamp) LIMIT 1") suspend fun nextUnsyncedTripId(): String?
     @Query("SELECT * FROM samples WHERE tripId=:tripId AND syncedAt IS NULL ORDER BY timestamp, id LIMIT :limit") suspend fun unsyncedForTrip(tripId: String, limit: Int): List<TelemetrySampleEntity>
     @Query("SELECT COUNT(*) FROM samples WHERE tripId=:tripId AND syncedAt IS NULL") suspend fun unsyncedCountForTrip(tripId: String): Int
+    @Query("SELECT MAX(timestamp) FROM samples WHERE tripId=:tripId AND latitude IS NOT NULL AND longitude IS NOT NULL") suspend fun latestGpsAt(tripId: String): Long?
 }
 
 @Dao interface PendingSyncBatchDao {
@@ -31,11 +32,21 @@ import kotlinx.coroutines.flow.Flow
     @Query("DELETE FROM pending_sync_batches WHERE batchId=:id") suspend fun delete(id: String)
 }
 
-@Database(entities = [TripEntity::class, TelemetrySampleEntity::class, PendingSyncBatchEntity::class], version = 4, exportSchema = true)
+@Dao interface TripEventDao {
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insert(event: TripEventEntity)
+    @Query("SELECT tripId FROM trip_events WHERE syncedAt IS NULL ORDER BY observedAt LIMIT 1") suspend fun nextUnsyncedTripId(): String?
+    @Query("SELECT * FROM trip_events WHERE tripId=:tripId AND syncedAt IS NULL ORDER BY observedAt, eventId LIMIT :limit") suspend fun unsyncedForTrip(tripId: String, limit: Int): List<TripEventEntity>
+    @Query("UPDATE trip_events SET syncedAt=:at WHERE eventId IN (:ids)") suspend fun markSynced(ids: List<String>, at: Long)
+    @Query("SELECT COUNT(*) FROM trip_events WHERE tripId=:tripId AND syncedAt IS NULL") suspend fun unsyncedCountForTrip(tripId: String): Int
+    @Query("SELECT * FROM trip_events WHERE tripId=:tripId AND kind='stop_start' AND stopId NOT IN (SELECT stopId FROM trip_events WHERE tripId=:tripId AND kind='stop_end') ORDER BY observedAt DESC LIMIT 1") suspend fun openStop(tripId: String): TripEventEntity?
+}
+
+@Database(entities = [TripEntity::class, TelemetrySampleEntity::class, PendingSyncBatchEntity::class, TripEventEntity::class], version = 5, exportSchema = true)
 abstract class BlackBoxDatabase : RoomDatabase() {
     abstract fun trips(): TripDao
     abstract fun samples(): SampleDao
     abstract fun pendingBatches(): PendingSyncBatchDao
+    abstract fun events(): TripEventDao
     companion object {
         @Volatile private var instance: BlackBoxDatabase? = null
         fun get(context: android.content.Context): BlackBoxDatabase = instance ?: synchronized(this) {
@@ -43,6 +54,7 @@ abstract class BlackBoxDatabase : RoomDatabase() {
                 .addMigrations(MIGRATION_1_2)
                 .addMigrations(MIGRATION_2_3)
                 .addMigrations(MIGRATION_3_4)
+                .addMigrations(MIGRATION_4_5)
                 .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING).build().also { instance = it }
         }
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -59,6 +71,13 @@ abstract class BlackBoxDatabase : RoomDatabase() {
         private val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE samples ADD COLUMN `obdValuesJson` TEXT NOT NULL DEFAULT '{}' ")
+            }
+        }
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE pending_sync_batches ADD COLUMN eventIds TEXT NOT NULL DEFAULT ''")
+                db.execSQL("CREATE TABLE IF NOT EXISTS trip_events (eventId TEXT NOT NULL PRIMARY KEY, stopId TEXT NOT NULL, tripId TEXT NOT NULL, kind TEXT NOT NULL, observedAt INTEGER NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL, syncedAt INTEGER)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_trip_events_tripId_observedAt ON trip_events (tripId, observedAt)")
             }
         }
     }

@@ -47,6 +47,15 @@ export type GpsSample = {
   horizontalAccuracyM?: number | null
 }
 
+export type TripEvent = {
+  eventId: string
+  stopId: string
+  kind: 'stop_start' | 'stop_end'
+  observedAt: string
+  latitude: number
+  longitude: number
+}
+
 export type MetricDefinition = { name: string; unit: string; description?: string | null }
 export type MetricSample = { sampleId: string; observedAt: string; name: string; unit: string; value: number }
 export type VehicleStatus = { tripId: string | null; gps: GpsSample | null; metrics: MetricSample[] }
@@ -176,8 +185,31 @@ export async function fetchDeviceStatus(deviceId: string, signal?: AbortSignal) 
 }
 
 export async function fetchTripGps(tripId: string, signal?: AbortSignal) {
-  const params = new URLSearchParams({ limit: '5000' })
-  return unwrapList<GpsSample>(await request<unknown>(`/api/v1/trips/${encodeURIComponent(tripId)}/gps?${params}`, { signal }))
+  const points: GpsSample[] = []
+  const pageSize = 5000
+  while (true) {
+    const params = new URLSearchParams({ limit: String(pageSize) })
+    const last = points[points.length - 1]
+    if (last) {
+      params.set('afterAt', last.observedAt)
+      params.set('afterSampleId', last.sampleId)
+    }
+    const page = unwrapList<GpsSample>(await request<unknown>(`/api/v1/trips/${encodeURIComponent(tripId)}/gps?${params}`, { signal }))
+    if (last && page[page.length - 1]?.sampleId === last.sampleId) return points
+    points.push(...page)
+    if (page.length < pageSize) return points
+  }
+}
+
+export async function fetchTripEvents(tripId: string, signal?: AbortSignal): Promise<TripEvent[]> {
+  try {
+    return unwrapList<TripEvent>(await request<unknown>(`/api/v1/trips/${encodeURIComponent(tripId)}/events`, { signal }))
+      .filter((event) => (event.kind === 'stop_start' || event.kind === 'stop_end') && Number.isFinite(event.latitude) && Number.isFinite(event.longitude))
+  } catch (error) {
+    // Older servers do not expose trip events; keep their routes usable.
+    if (error instanceof ApiError && error.status === 404) return []
+    throw error
+  }
 }
 
 export async function fetchTripTelemetryAt(tripId: string, at: string, toleranceMs = 2000, signal?: AbortSignal): Promise<MetricSample[]> {

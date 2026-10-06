@@ -1,21 +1,21 @@
 # Taskboard — Vehicle Blackbox
 
-Stato al 2026-10-05. Le caselle indicano lavoro completato nel repository, non una build verificata su dispositivo. Docker Desktop ha completato lo spostamento di `Docker.raw` sul disco esterno.
+Stato al 2026-10-06. Le caselle indicano lavoro completato nel repository, non una prova della nuova versione su dispositivo. Docker Desktop ha completato lo spostamento di `Docker.raw` sul disco esterno.
 
 ## P0 — rendere utilizzabile il logger Android
 
-- [x] Struttura Kotlin/Gradle, Room, servizio foreground persistente e ricevitore power dinamico.
-- [x] State machine base e persistenza trip/campioni batteria.
+- [x] Struttura Kotlin/Gradle, Room e servizio foreground persistente; alimentazione registrata come dato diagnostico.
+- [x] Rilevatore GPS di movimento/sosta, persistenza trip/campioni batteria ed eventi sosta Room v5.
 - [x] SDK e wrapper disponibili; `:app:testDebugUnitTest :app:assembleDebug` riusciti con cache sul disco esterno.
-- [x] Permessi runtime, avvio monitor da Activity visibile e recupero stato power all'avvio; impossibile garantire cold start da broadcast su Android stock.
-- [x] Confermati via ADB modello AC2003, device Nord, Android 12/API 31; APK debug installato e MainActivity avviata.
+- [x] Permessi runtime, avvio monitor da Activity visibile e recupero viaggio attivo recente dopo restart; impossibile garantire cold start dopo force-stop su Android stock.
+- [x] Confermati in precedenza via ADB modello AC2003, device Nord, Android 12/API 31. APK di questa revisione ancora da installare: telefono non collegato ora.
 - [ ] Verificare ordinamento eventi concorrenti, sopravvivenza servizio e restart dopo kill sul telefono.
-- [x] GPS reale 1 Hz con Fused Location; request ferma in IDLE; precisione, quota, heading e velocità salvati.
-- [ ] Collector GPS e power fake; test end-to-end: power on → campioni → breve interruzione → ripresa → chiusura.
+- [x] GPS Fused Location: richiesta 15 s in attesa movimento, 1 Hz in viaggio; precisione, quota, heading e velocità salvati.
+- [ ] Calibrare con percorso reale soglie movimento, sosta 2 min e chiusura 90 min; verificare riavvio durante sosta.
 - [ ] DataStore: grace period, intervallo GPS, device ID e preferenze sync.
-- [ ] UI diagnostica completa: presenti permessi, configurazione sync e contatori Room; mancano stato live power/trip/GPS e errori.
+- [ ] UI diagnostica: presenti permessi, ultimo GPS, configurazione sync, contatori Room ed errori sync; manca stato viaggio/sosta live.
 - [ ] Log locali con retention e export; nessun dato posizione in log verbosi.
-- [ ] Prova sul Nord reale con schermo spento, riavvio, perdita power e ottimizzazioni OxygenOS.
+- [ ] Prova sul Nord reale con schermo spento, riavvio, stop/start motore, sosta carburante e ottimizzazioni OxygenOS.
 
 **Done:** APK installabile; trip GPS completo offline con riavvio e power cycle; nessuna perdita del trip già persistito; test del percorso fake e prova fisica documentata.
 
@@ -25,6 +25,7 @@ Stato al 2026-10-05. Le caselle indicano lavoro completato nel repository, non u
 - [x] Catalogo metriche, teste di serie, campioni numerici hypertable e punto GPS PostGIS GiST; ingest v1 a doppia scrittura transazionale.
 - [x] Letture API per metrica e correlazione geografica con intervallo, raggio, tolleranza e limite.
 - [x] Ogni fix GPS ha `trip_id`, `delta_sec` e `delta_m` dal precedente; batch fuori ordine riparano successore e distanza totale tour.
+- [x] Eventi `stop_start`/`stop_end` con `stopId` condiviso, outbox idempotente, migrazione backend 0007 e overlay sulla mappa.
 - [ ] Backfill delle righe precedenti e verifica parità vecchie/nuove serie; letture metriche su dati reali ancora da misurare.
 - [ ] Misurare ingest per batch su dati OBD reali; ottimizzare scritture metriche con bulk insert se SQL per campione limita throughput.
 - [ ] Contratto JSON v1 documentato in `server/README.md`; OpenAPI ancora da generare.
@@ -53,7 +54,8 @@ Stato al 2026-10-05. Le caselle indicano lavoro completato nel repository, non u
 
 - [x] React + TypeScript + Vite con client API tipizzato manualmente; `npm run build` riuscito.
 - [ ] Dashboard veicoli/viaggi e traccia GPS presenti; mancano mappa, grafici OBD, salute dispositivo e stato sync.
-- [ ] Query server con intervallo temporale, paginazione e downsampling; evitare download di mesi di campioni nel browser.
+- [x] Paginazione a cursore dei punti GPS: mappa mostra intero viaggio invece dei soli primi 5.000 punti.
+- [ ] Downsampling dei viaggi molto lunghi e paginazione metriche; evitare download di mesi di campioni nel browser.
 - [x] Login dashboard username/password Argon2id, sessioni revocabili in cookie HttpOnly; separato dai token dispositivo.
 - [ ] Scope accesso per veicolo e rate limiting login prima di esposizione pubblica.
 - [ ] Export CSV/JSON e cancellazione dati su richiesta.

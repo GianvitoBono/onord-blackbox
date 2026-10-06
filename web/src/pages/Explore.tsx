@@ -1,12 +1,21 @@
 import type { Dispatch, SetStateAction } from 'react'
-import type { GpsSample, MetricDefinition, MetricSample, Trip } from '../api'
+import type { GpsSample, MetricDefinition, MetricSample, Trip, TripEvent } from '../api'
 import TripMap from '../components/TripMap'
 import TelemetryChart from '../components/TelemetryChart'
 import { formatDate, formatDistance, metricLabel, nearestGps, tripReason, type NearbyReading } from './format'
 
-type Props = { trips: Trip[]; tripId: string; setTripId: Dispatch<SetStateAction<string>>; selectedTrip?: Trip; detailError: string; detailLoading: boolean; onRefresh: () => void; gps: GpsSample[]; displayPoint: GpsSample | null; setHoverPoint: Dispatch<SetStateAction<GpsSample | null>>; setSelectedPoint: Dispatch<SetStateAction<GpsSample | null>>; nearby: NearbyReading[]; nearbyLoading: boolean; catalog: MetricDefinition[]; metricName: string; setMetricName: Dispatch<SetStateAction<string>>; metrics: MetricSample[]; selectedMetric?: MetricDefinition }
+type Props = { trips: Trip[]; tripId: string; setTripId: Dispatch<SetStateAction<string>>; selectedTrip?: Trip; detailError: string; detailLoading: boolean; onRefresh: () => void; gps: GpsSample[]; events: TripEvent[]; displayPoint: GpsSample | null; setHoverPoint: Dispatch<SetStateAction<GpsSample | null>>; setSelectedPoint: Dispatch<SetStateAction<GpsSample | null>>; displayStopEvent: TripEvent | null; setHoverStopEvent: Dispatch<SetStateAction<TripEvent | null>>; setSelectedStopEvent: Dispatch<SetStateAction<TripEvent | null>>; nearby: NearbyReading[]; nearbyLoading: boolean; catalog: MetricDefinition[]; metricName: string; setMetricName: Dispatch<SetStateAction<string>>; metrics: MetricSample[]; selectedMetric?: MetricDefinition }
 
-export default function Explore({ trips, tripId, setTripId, selectedTrip, detailError, detailLoading, onRefresh, gps, displayPoint, setHoverPoint, setSelectedPoint, nearby, nearbyLoading, catalog, metricName, setMetricName, metrics, selectedMetric }: Props) {
+function stopDuration(events: TripEvent[], event: TripEvent): string {
+  const match = events.find((candidate) => candidate.stopId === event.stopId && candidate.kind !== event.kind)
+  if (!match) return event.kind === 'stop_start' ? 'Sosta in corso' : 'Inizio sosta non registrato'
+  const seconds = Math.max(0, Math.round(Math.abs(Date.parse(match.observedAt) - Date.parse(event.observedAt)) / 1000))
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  return hours ? `${hours} h ${minutes} min` : `${minutes} min`
+}
+
+export default function Explore({ trips, tripId, setTripId, selectedTrip, detailError, detailLoading, onRefresh, gps, events, displayPoint, setHoverPoint, setSelectedPoint, displayStopEvent, setHoverStopEvent, setSelectedStopEvent, nearby, nearbyLoading, catalog, metricName, setMetricName, metrics, selectedMetric }: Props) {
   return (
     <>
 <div className="page-heading explore-heading">
@@ -35,15 +44,20 @@ export default function Explore({ trips, tripId, setTripId, selectedTrip, detail
 {selectedTrip && <p>Fine: {selectedTrip.endedAt ? formatDate(selectedTrip.endedAt) : 'in corso'} · Avvio: {tripReason(selectedTrip.startReason)} · Chiusura: {tripReason(selectedTrip.endReason)}</p>}
 </div>
 <span>
-{gps.length === 5000 ? 'Primi 5.000 punti mostrati' : `${gps.length} punti`}
+{`${gps.length} punti`}
 </span>
 </div>
 <div className="large-map">
-<TripMap samples={gps} selectedSampleId={displayPoint?.sampleId} onPointHover={setHoverPoint} onPointSelect={setSelectedPoint} />
+<TripMap samples={gps} events={events} selectedSampleId={displayPoint?.sampleId} onPointHover={setHoverPoint} onPointSelect={setSelectedPoint} onEventHover={setHoverStopEvent} onEventSelect={setSelectedStopEvent} />
 </div>
 </div>
 <aside className="point-inspector">
 <span className="eyebrow">PUNTO SELEZIONATO</span>
+{displayStopEvent && <section className="stop-inspector" aria-label="Evento sosta selezionato">
+<span className={`stop-event-kind ${displayStopEvent.kind === 'stop_start' ? 'is-start' : 'is-end'}`}>{displayStopEvent.kind === 'stop_start' ? 'Inizio sosta' : 'Fine sosta'}</span>
+<h2>{formatDate(displayStopEvent.observedAt)}</h2>
+<dl className="inspector-data"><div><dt>Durata sosta</dt><dd>{stopDuration(events, displayStopEvent)}</dd></div></dl>
+</section>}
 {displayPoint ? <>
 <h2>
 {formatDate(displayPoint.observedAt)}
@@ -98,7 +112,7 @@ export default function Explore({ trips, tripId, setTripId, selectedTrip, detail
 </div> : <p className="inspector-muted">Nessun segnale vicino al punto.</p>}
 </> : <div className="inspector-empty">
 <span>◎</span>
-<p>Passa il mouse sulla traccia o seleziona un punto per ispezionarlo.</p>
+<p>{displayStopEvent ? 'Passa sulla traccia o seleziona un punto GPS per vedere velocità e telemetria.' : 'Passa il mouse sulla traccia o seleziona un punto per ispezionarlo.'}</p>
 </div>}
 </aside>
 </div>

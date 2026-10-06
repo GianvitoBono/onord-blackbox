@@ -10,6 +10,9 @@ const tripReasons: Record<string, string> = {
   power_disconnected: 'alimentazione scollegata',
   unexpected_shutdown: 'servizio riavviato',
   monitor_stopped: 'monitor fermato',
+  movement_detected: 'movimento rilevato',
+  stationary_timeout: 'sosta prolungata',
+  recovery_timeout: 'sosta prolungata dopo riavvio',
 }
 export const tripReason = (reason?: string | null) => reason ? tripReasons[reason] || reason.replaceAll('_', ' ') : '—'
 export const pages = ['overview', 'journeys', 'explore', 'fleet', 'admin', 'settings'] as const

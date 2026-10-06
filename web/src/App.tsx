@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react'
-import { ApiError, approvePendingDevice, fetchDevices, fetchPendingDevices, fetchSession, fetchTripGps, createVehicle, updateVehicle, fetchTripMetricCatalog, fetchTripMetricSamples, fetchTripTelemetryAt, fetchTrips, fetchVehicles, fetchVehicleStatus, GpsSample, login, logout, ManagedDevice, MetricDefinition, MetricSample, PendingDevice, rotateDeviceToken, Trip, Vehicle, VehicleStatus } from './api'
+import { ApiError, approvePendingDevice, fetchDevices, fetchPendingDevices, fetchSession, fetchTripEvents, fetchTripGps, createVehicle, updateVehicle, fetchTripMetricCatalog, fetchTripMetricSamples, fetchTripTelemetryAt, fetchTrips, fetchVehicles, fetchVehicleStatus, GpsSample, login, logout, ManagedDevice, MetricDefinition, MetricSample, PendingDevice, rotateDeviceToken, Trip, TripEvent, Vehicle, VehicleStatus } from './api'
 import Overview from './pages/Overview'
 import Journeys from './pages/Journeys'
 import Explore from './pages/Explore'
@@ -30,11 +30,14 @@ export default function App() {
   const [trips, setTrips] = useState<Trip[]>([])
   const [tripId, setTripId] = useState('')
   const [gps, setGps] = useState<GpsSample[]>([])
+  const [tripEvents, setTripEvents] = useState<TripEvent[]>([])
   const [catalog, setCatalog] = useState<MetricDefinition[]>([])
   const [metricName, setMetricName] = useState('')
   const [metrics, setMetrics] = useState<MetricSample[]>([])
   const [selectedPoint, setSelectedPoint] = useState<GpsSample | null>(null)
   const [hoverPoint, setHoverPoint] = useState<GpsSample | null>(null)
+  const [selectedStopEvent, setSelectedStopEvent] = useState<TripEvent | null>(null)
+  const [hoverStopEvent, setHoverStopEvent] = useState<TripEvent | null>(null)
   const [nearby, setNearby] = useState<NearbyReading[]>([])
   const [nearbyLoading, setNearbyLoading] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -59,9 +62,10 @@ export default function App() {
   const selectedTrip = trips.find(t => t.id === tripId)
   const selectedMetric = catalog.find(m => m.name === metricName)
   const displayPoint = hoverPoint || selectedPoint
+  const displayStopEvent = hoverStopEvent || selectedStopEvent
   const totalDistance = trips.reduce((n, t) => n + (t.distanceGpsM ?? t.distanceObdM ?? 0), 0)
 
-  const clearSession = useCallback(() => { setSignedIn(''); setVehicles([]); setDevices([]); setVehicleStatus(null); setPending([]); setTrips([]); setTripId(''); setGps([]); setCatalog([]); setMetrics([]); setSelectedPoint(null); setHoverPoint(null); setNearby([]); setIssuedToken(null); setAdminPassword({}); setCustomToken({}); setAdminName({}); setTokenMode({}); setPassword('') }, [])
+  const clearSession = useCallback(() => { setSignedIn(''); setVehicles([]); setDevices([]); setVehicleStatus(null); setPending([]); setTrips([]); setTripId(''); setGps([]); setTripEvents([]); setCatalog([]); setMetrics([]); setSelectedPoint(null); setHoverPoint(null); setSelectedStopEvent(null); setHoverStopEvent(null); setNearby([]); setIssuedToken(null); setAdminPassword({}); setCustomToken({}); setAdminName({}); setTokenMode({}); setPassword('') }, [])
   const handleError = useCallback((failure: unknown) => { if (failure instanceof ApiError && (failure.status === 401 || failure.status === 403)) clearSession(); else setError(message(failure)) }, [clearSession])
   const loadFleet = useCallback(async () => {
     setLoading(true); setError('')
@@ -87,7 +91,7 @@ export default function App() {
     const timer = window.setInterval(refresh, 30_000)
     return () => { window.clearInterval(timer); controller.abort() }
   }, [signedIn, selectedId, clearSession])
-  useEffect(() => { setTrips([]); setTripId(''); setGps([]); setCatalog([]); setMetrics([]); setSelectedPoint(null) }, [signedIn, selectedId])
+  useEffect(() => { setTrips([]); setTripId(''); setGps([]); setTripEvents([]); setCatalog([]); setMetrics([]); setSelectedPoint(null); setSelectedStopEvent(null) }, [signedIn, selectedId])
   useEffect(() => {
     if (!signedIn || !selectedId) return
     const controller = new AbortController()
@@ -101,15 +105,16 @@ export default function App() {
     }).catch(e => { if (!controller.signal.aborted) setDetailError(message(e)) }).finally(() => { if (!controller.signal.aborted) setDetailLoading(false) })
     return () => controller.abort()
   }, [signedIn, selectedId, refreshTick])
-  useEffect(() => { setSelectedPoint(null); setHoverPoint(null); setNearby([]); setGps([]); setCatalog([]); setMetrics([]) }, [tripId])
+  useEffect(() => { setSelectedPoint(null); setHoverPoint(null); setSelectedStopEvent(null); setHoverStopEvent(null); setNearby([]); setGps([]); setTripEvents([]); setCatalog([]); setMetrics([]) }, [tripId])
   useEffect(() => {
     if (!tripId) return
     const controller = new AbortController()
     setDetailLoading(true)
     setDetailError('')
-    void Promise.all([fetchTripGps(tripId, controller.signal), fetchTripMetricCatalog(tripId, controller.signal)]).then(([points, definitions]) => {
+    void Promise.all([fetchTripGps(tripId, controller.signal), fetchTripMetricCatalog(tripId, controller.signal), fetchTripEvents(tripId, controller.signal)]).then(([points, definitions, events]) => {
       if (controller.signal.aborted) return
       setGps(points)
+      setTripEvents(events)
       setCatalog(definitions)
       setMetricName(current => definitions.some(m => m.name === current) ? current : definitions[0]?.name || '')
     }).catch(e => { if (!controller.signal.aborted) setDetailError(message(e)) }).finally(() => { if (!controller.signal.aborted) setDetailLoading(false) })
@@ -208,7 +213,7 @@ export default function App() {
 </div>}
         {page === 'overview' && <Overview selectedVehicle={selectedVehicle} trips={trips} totalDistance={totalDistance} detailLoading={detailLoading} deviceFresh={deviceFresh} updatedAt={updatedAt} loading={loading} loadFleet={refreshAll} openTrip={openTrip} />}
         {page === 'journeys' && <Journeys selectedVehicle={selectedVehicle} trips={trips} detailLoading={detailLoading} openTrip={openTrip} />}
-        {page === 'explore' && <Explore trips={trips} tripId={tripId} setTripId={setTripId} selectedTrip={selectedTrip} detailError={detailError} detailLoading={detailLoading} onRefresh={() => setRefreshTick(value => value + 1)} gps={gps} displayPoint={displayPoint} setHoverPoint={setHoverPoint} setSelectedPoint={setSelectedPoint} nearby={nearby} nearbyLoading={nearbyLoading} catalog={catalog} metricName={metricName} setMetricName={setMetricName} metrics={metrics} selectedMetric={selectedMetric} />}
+        {page === 'explore' && <Explore trips={trips} tripId={tripId} setTripId={setTripId} selectedTrip={selectedTrip} detailError={detailError} detailLoading={detailLoading} onRefresh={() => setRefreshTick(value => value + 1)} gps={gps} events={tripEvents} displayPoint={displayPoint} setHoverPoint={setHoverPoint} setSelectedPoint={setSelectedPoint} displayStopEvent={displayStopEvent} setHoverStopEvent={setHoverStopEvent} setSelectedStopEvent={setSelectedStopEvent} nearby={nearby} nearbyLoading={nearbyLoading} catalog={catalog} metricName={metricName} setMetricName={setMetricName} metrics={metrics} selectedMetric={selectedMetric} />}
         {page === 'fleet' && <Fleet vehicles={vehicles} devices={devices} selectedId={selectedId} selectedVehicle={selectedVehicle} selectedDevice={selectedDevice} deviceFresh={deviceFresh} vehicleStatus={vehicleStatus} statusError={statusError} vehicleMessage={vehicleMessage} vehicleEditing={vehicleEditing} vehicleForm={vehicleForm} setVehicleForm={setVehicleForm} vehicleBusy={vehicleBusy} saveVehicle={saveVehicle} editVehicle={editVehicle} setVehicleEditing={setVehicleEditing} selectVehicle={selectVehicle} openTrip={openTrip} />}
         {page === 'admin' && <Admin vehicles={vehicles} devices={devices} pending={pending} adminMessage={adminMessage} adminVehicle={adminVehicle} setAdminVehicle={setAdminVehicle} adminName={adminName} setAdminName={setAdminName} adminPassword={adminPassword} setAdminPassword={setAdminPassword} adminBusy={adminBusy} tokenMode={tokenMode} setTokenMode={setTokenMode} customToken={customToken} setCustomToken={setCustomToken} issuedToken={issuedToken} approve={approve} rotate={rotate} loadFleet={loadFleet} />}
         {page === 'settings' && <Settings theme={theme} setTheme={setTheme} signedIn={signedIn} updatedAt={updatedAt} />}

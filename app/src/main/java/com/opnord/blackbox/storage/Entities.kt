@@ -50,5 +50,18 @@ data class PendingSyncBatchEntity(
     val tripId: String,
     val payload: String,
     val sampleIds: String,
+    @androidx.room.ColumnInfo(defaultValue = "''") val eventIds: String = "",
     val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "trip_events", indices = [androidx.room.Index(value = ["tripId", "observedAt"])])
+data class TripEventEntity(
+    @PrimaryKey val eventId: String,
+    val stopId: String,
+    val tripId: String,
+    val kind: String,
+    val observedAt: Long,
+    val latitude: Double,
+    val longitude: Double,
+    val syncedAt: Long? = null
 )

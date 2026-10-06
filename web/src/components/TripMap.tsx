@@ -1,28 +1,32 @@
 import { useEffect, useMemo, useRef } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import type { GpsSample } from '../api'
+import type { GpsSample, TripEvent } from '../api'
 import './TripMap.css'
 
 type TripMapProps = {
   samples: GpsSample[]
+  events?: TripEvent[]
   selectedSampleId?: string | null
   onPointHover?: (sample: GpsSample | null) => void
   onPointSelect?: (sample: GpsSample) => void
+  onEventHover?: (event: TripEvent | null) => void
+  onEventSelect?: (event: TripEvent) => void
 }
 
 const defaultTileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
 const tileUrl = import.meta.env.VITE_MAP_TILE_URL || defaultTileUrl
 const tileAttribution = import.meta.env.VITE_MAP_ATTRIBUTION || '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 
-export default function TripMap({ samples, selectedSampleId, onPointHover, onPointSelect }: TripMapProps) {
+export default function TripMap({ samples, events = [], selectedSampleId, onPointHover, onPointSelect, onEventHover, onEventSelect }: TripMapProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
   const routeLayerRef = useRef<L.LayerGroup | null>(null)
   const selectedLayerRef = useRef<L.LayerGroup | null>(null)
+  const eventLayerRef = useRef<L.LayerGroup | null>(null)
   const lastRouteRef = useRef<string>('')
-  const callbacksRef = useRef({ onPointHover, onPointSelect })
-  callbacksRef.current = { onPointHover, onPointSelect }
+  const callbacksRef = useRef({ onPointHover, onPointSelect, onEventHover, onEventSelect })
+  callbacksRef.current = { onPointHover, onPointSelect, onEventHover, onEventSelect }
 
   const routeKey = useMemo(() => samples.map((sample) => sample.sampleId).join('|'), [samples])
 
@@ -44,6 +48,7 @@ export default function TripMap({ samples, selectedSampleId, onPointHover, onPoi
 
     const routeLayer = L.layerGroup().addTo(map)
     const selectedLayer = L.layerGroup().addTo(map)
+    const eventLayer = L.layerGroup().addTo(map)
     map.on('mouseout', () => callbacksRef.current.onPointHover?.(null))
 
     const resizeObserver = new ResizeObserver(() => map.invalidateSize({ pan: false, debounceMoveend: true }))
@@ -51,6 +56,7 @@ export default function TripMap({ samples, selectedSampleId, onPointHover, onPoi
     mapRef.current = map
     routeLayerRef.current = routeLayer
     selectedLayerRef.current = selectedLayer
+    eventLayerRef.current = eventLayer
 
     return () => {
       callbacksRef.current.onPointHover?.(null)
@@ -59,8 +65,34 @@ export default function TripMap({ samples, selectedSampleId, onPointHover, onPoi
       mapRef.current = null
       routeLayerRef.current = null
       selectedLayerRef.current = null
+      eventLayerRef.current = null
     }
   }, [])
+
+  useEffect(() => {
+    const map = mapRef.current
+    const layer = eventLayerRef.current
+    if (!map || !layer) return
+    layer.clearLayers()
+
+    for (const event of events || []) {
+      if (!Number.isFinite(event.latitude) || !Number.isFinite(event.longitude)) continue
+      const isStart = event.kind === 'stop_start'
+      const marker = L.circleMarker([event.latitude, event.longitude], {
+        renderer: map.options.renderer,
+        radius: 7,
+        color: '#f7faf8',
+        weight: 2,
+        fillColor: isStart ? '#e6a83c' : '#d66e59',
+        fillOpacity: 1,
+        bubblingMouseEvents: false,
+      }).addTo(layer)
+      marker.bindTooltip(isStart ? 'Inizio sosta' : 'Fine sosta', { direction: 'top', offset: [0, -6] })
+      marker.on('mouseover', () => callbacksRef.current.onEventHover?.(event))
+      marker.on('mouseout', () => callbacksRef.current.onEventHover?.(null))
+      marker.on('click', () => callbacksRef.current.onEventSelect?.(event))
+    }
+  }, [events])
 
   useEffect(() => {
     const map = mapRef.current
@@ -94,6 +126,9 @@ export default function TripMap({ samples, selectedSampleId, onPointHover, onPoi
       marker.on('mouseout', () => callbacksRef.current.onPointHover?.(null))
       marker.on('click', () => callbacksRef.current.onPointSelect?.(sample))
     }
+    eventLayerRef.current?.eachLayer((eventMarker) => {
+      if (eventMarker instanceof L.Path) eventMarker.bringToFront()
+    })
 
     if (routeKey !== lastRouteRef.current) {
       const bounds = L.latLngBounds(latLngs)
@@ -121,6 +156,9 @@ export default function TripMap({ samples, selectedSampleId, onPointHover, onPoi
       fillOpacity: 1,
       interactive: false,
     }).addTo(selectedLayer)
+    eventLayerRef.current?.eachLayer((eventMarker) => {
+      if (eventMarker instanceof L.Path) eventMarker.bringToFront()
+    })
   }, [samples, selectedSampleId])
 
   return (

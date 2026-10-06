@@ -468,6 +468,34 @@ a {
   letter-spacing:-.04em;
   margin:16px 0
 }
+.stop-inspector {
+  margin:18px 0 22px;
+  padding:14px 14px 1px;
+  border:1px solid #e8e5d8;
+  border-radius:6px;
+  background:#fbfaf6
+}
+.stop-event-kind {
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  font-size:10px;
+  font-weight:800;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  color:#8c6821
+}
+.stop-event-kind::before {
+  content:'';
+  width:8px;
+  height:8px;
+  border-radius:50%;
+  background:#e6a83c
+}
+.stop-event-kind.is-end { color:#985142 }
+.stop-event-kind.is-end::before { background:#d66e59 }
+.stop-inspector h2 { margin:8px 0 0 }
+.stop-inspector .inspector-data { margin:0 0 12px }
 .inspector-coordinates {
   font:500 13px/1.7 ui-monospace,Menlo,monospace;
   color:#3b756a;
@@ -1092,6 +1120,11 @@ a {
   background:#1e2b24;
   border-color:var(--line)
 }
+[data-theme='dark'] .stop-inspector {
+  background:#252f2b;
+  border-color:#4d5345
+}
+[data-theme='dark'] .stop-inspector .inspector-data div { border-color:#3c4841 }
 [data-theme='dark'] .fleet-telemetry {
   background:#1e2b24
 }

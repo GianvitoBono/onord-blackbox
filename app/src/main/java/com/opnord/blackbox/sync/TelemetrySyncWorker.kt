@@ -77,7 +77,8 @@ class TelemetrySyncWorker(context: Context, params: WorkerParameters) : Coroutin
                     ack.optInt("schemaVersion") == 1 &&
                     ack.optInt("gpsAccepted", -1) == payload.getJSONArray("gpsSamples").length() &&
                     ack.optInt("deviceAccepted", -1) == payload.getJSONArray("deviceSamples").length() &&
-                    ack.optInt("obdAccepted", -1) == payload.getJSONArray("obdSamples").length()
+                    ack.optInt("obdAccepted", -1) == payload.getJSONArray("obdSamples").length() &&
+                    ack.optInt("eventsAccepted", -1) == (payload.optJSONArray("tripEvents")?.length() ?: 0)
             }.getOrDefault(false)
             response.connection.disconnect()
             if (!accepted) {
@@ -89,7 +90,10 @@ class TelemetrySyncWorker(context: Context, params: WorkerParameters) : Coroutin
                 db.withTransaction {
                     val ids = batch.sampleIds.split(',').filter(String::isNotBlank)
                     if (ids.isNotEmpty()) db.samples().markSynced(ids, System.currentTimeMillis())
-                    if (db.samples().unsyncedCountForTrip(batch.tripId) == 0 && db.trips().byId(batch.tripId)?.state == "CLOSED")
+                    val eventIds = batch.eventIds.split(',').filter(String::isNotBlank)
+                    if (eventIds.isNotEmpty()) db.events().markSynced(eventIds, System.currentTimeMillis())
+                    if (db.samples().unsyncedCountForTrip(batch.tripId) == 0 &&
+                        db.events().unsyncedCountForTrip(batch.tripId) == 0 && db.trips().byId(batch.tripId)?.state == "CLOSED")
                         db.trips().markSynced(batch.tripId, System.currentTimeMillis())
                     db.pendingBatches().delete(batch.batchId)
                 }
@@ -101,7 +105,8 @@ class TelemetrySyncWorker(context: Context, params: WorkerParameters) : Coroutin
             completed++
         }
         val morePending = try {
-            db.pendingBatches().first() != null || db.samples().nextUnsyncedTripId() != null || db.trips().nextClosedNeedingSync() != null
+            db.pendingBatches().first() != null || db.events().nextUnsyncedTripId() != null ||
+                db.samples().nextUnsyncedTripId() != null || db.trips().nextClosedNeedingSync() != null
         } catch (error: Exception) {
             report("Errore coda sync: ${error.javaClass.simpleName}")
             return@withContext Result.retry()
@@ -120,13 +125,15 @@ class TelemetrySyncWorker(context: Context, params: WorkerParameters) : Coroutin
             // The configured device changed while a batch was queued. Rebuild from unsynced samples.
             db.pendingBatches().delete(pending.batchId)
         }
-        val tripId = db.samples().nextUnsyncedTripId() ?: db.trips().nextClosedNeedingSync() ?: return@withTransaction null
+        val tripId = db.events().nextUnsyncedTripId() ?: db.samples().nextUnsyncedTripId()
+            ?: db.trips().nextClosedNeedingSync() ?: return@withTransaction null
         val samples = db.samples().unsyncedForTrip(tripId, MAX_SAMPLES_PER_BATCH)
+        val events = db.events().unsyncedForTrip(tripId, MAX_EVENTS_PER_BATCH)
         val trip = db.trips().byId(tripId) ?: return@withTransaction null
-        if (samples.isEmpty() && trip.state != "CLOSED") return@withTransaction null
+        if (samples.isEmpty() && events.isEmpty() && trip.state != "CLOSED") return@withTransaction null
         val batchId = UUID.randomUUID().toString()
-        val encoded = BatchPayload.encode(deviceId, batchId, trip, samples)
-        PendingSyncBatchEntity(batchId, tripId, encoded.payload, encoded.sampleIds.joinToString(",")).also {
+        val encoded = BatchPayload.encode(deviceId, batchId, trip, samples, events)
+        PendingSyncBatchEntity(batchId, tripId, encoded.payload, encoded.sampleIds.joinToString(","), encoded.eventIds.joinToString(",")).also {
             db.pendingBatches().insert(it)
         }
     }
@@ -163,6 +170,7 @@ class TelemetrySyncWorker(context: Context, params: WorkerParameters) : Coroutin
         const val UNIQUE_PERIODIC = "telemetry-sync-periodic"
         const val UNIQUE_ONCE = "telemetry-sync-once"
         private const val MAX_SAMPLES_PER_BATCH = 200
+        private const val MAX_EVENTS_PER_BATCH = 20
         private const val MAX_BATCHES_PER_RUN = 50
         private const val MAX_RUN_MILLIS = 4 * 60 * 1000L
 

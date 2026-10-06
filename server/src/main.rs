@@ -75,6 +75,8 @@ struct Batch {
     obd_samples: Vec<Obd>,
     #[serde(default)]
     device_samples: Vec<DeviceSample>,
+    #[serde(default)]
+    trip_events: Vec<TripEvent>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -123,6 +125,16 @@ struct DeviceSample {
     battery_pct: Option<f32>,
     battery_temp_c: Option<f32>,
 }
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TripEvent {
+    event_id: Uuid,
+    stop_id: Uuid,
+    kind: String,
+    observed_at: DateTime<Utc>,
+    latitude: f64,
+    longitude: f64,
+}
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Ack {
@@ -131,6 +143,8 @@ struct Ack {
     gps_accepted: i32,
     obd_accepted: i32,
     device_accepted: i32,
+    #[serde(default)]
+    events_accepted: i32,
     received_at: DateTime<Utc>,
     schema_version: u32,
 }
@@ -365,17 +379,21 @@ async fn ingest(
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
-    if let Some(row)=sqlx::query("SELECT payload_sha256,gps_count,obd_count,device_count,accepted_at FROM ingest_batches WHERE device_id=$1 AND batch_id=$2").bind(batch.device_id).bind(batch.batch_id).fetch_optional(&mut *tx).await.map_err(db_err)? {
+    if let Some(row)=sqlx::query("SELECT payload_sha256,gps_count,obd_count,device_count,event_count,accepted_at FROM ingest_batches WHERE device_id=$1 AND batch_id=$2").bind(batch.device_id).bind(batch.batch_id).fetch_optional(&mut *tx).await.map_err(db_err)? {
   let prior:Vec<u8>=row.try_get("payload_sha256").map_err(db_err)?;
   if prior!=payload_hash { return Err(err(StatusCode::CONFLICT,"batch_id_conflict","batchId was already accepted with a different payload")); }
-  let ack=Ack{batch_id:batch.batch_id,accepted:true,gps_accepted:row.try_get("gps_count").map_err(db_err)?,obd_accepted:row.try_get("obd_count").map_err(db_err)?,device_accepted:row.try_get("device_count").map_err(db_err)?,received_at:row.try_get("accepted_at").map_err(db_err)?,schema_version:1};
+  let ack=Ack{batch_id:batch.batch_id,accepted:true,gps_accepted:row.try_get("gps_count").map_err(db_err)?,obd_accepted:row.try_get("obd_count").map_err(db_err)?,device_accepted:row.try_get("device_count").map_err(db_err)?,events_accepted:row.try_get("event_count").map_err(db_err)?,received_at:row.try_get("accepted_at").map_err(db_err)?,schema_version:1};
   tx.commit().await.map_err(db_err)?; return Ok(Json(ack));
  }
-    let n = batch.gps_samples.len() + batch.obd_samples.len() + batch.device_samples.len();
+    let n = batch.gps_samples.len()
+        + batch.obd_samples.len()
+        + batch.device_samples.len()
+        + batch.trip_events.len();
     if n > 10_000
         || batch.gps_samples.len() > 10_000
         || batch.obd_samples.len() > 10_000
         || batch.device_samples.len() > 10_000
+        || batch.trip_events.len() > 10_000
     {
         return Err(err(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -390,6 +408,7 @@ async fn ingest(
         .map(|x| x.sample_id)
         .chain(batch.obd_samples.iter().map(|x| x.sample_id))
         .chain(batch.device_samples.iter().map(|x| x.sample_id))
+        .chain(batch.trip_events.iter().map(|x| x.event_id))
         .all(|id| sample_ids.insert(id));
     if !unique {
         return Err(err(
@@ -464,6 +483,19 @@ async fn ingest(
             ));
         }
     }
+    for event in &batch.trip_events {
+        if !matches!(event.kind.as_str(), "stop_start" | "stop_end")
+            || !(-90.0..=90.0).contains(&event.latitude)
+            || !(-180.0..=180.0).contains(&event.longitude)
+            || event.observed_at < batch.trip.started_at
+        {
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "invalid_trip_event",
+                "invalid trip event kind, coordinates, or timestamp",
+            ));
+        }
+    }
     let assignment=sqlx::query("SELECT 1 FROM device_vehicle_assignments WHERE device_id=$1 AND vehicle_id=$2 AND unassigned_at IS NULL").bind(batch.device_id).bind(vehicle_id).fetch_optional(&mut *tx).await.map_err(db_err)?;
     if assignment.is_none() {
         return Err(err(
@@ -486,6 +518,23 @@ async fn ingest(
             StatusCode::CONFLICT,
             "trip_conflict",
             "trip id belongs to another device",
+        ));
+    }
+    let stored_started_at: DateTime<Utc> =
+        sqlx::query_scalar("SELECT started_at FROM trips WHERE id=$1")
+            .bind(batch.trip.id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db_err)?;
+    if batch
+        .trip_events
+        .iter()
+        .any(|event| event.observed_at < stored_started_at)
+    {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "invalid_trip_event",
+            "event observedAt precedes trip start",
         ));
     }
     sqlx::query("UPDATE trips SET ended_at=COALESCE($2,ended_at), end_reason=COALESCE($3,end_reason), distance_gps_m=COALESCE($4,distance_gps_m), distance_obd_m=COALESCE($5,distance_obd_m) WHERE id=$1")
@@ -604,7 +653,31 @@ async fn ingest(
             }
         }
     }
-    let row=sqlx::query("INSERT INTO ingest_batches(device_id,batch_id,payload_sha256,gps_count,obd_count,device_count) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(device_id,batch_id) DO NOTHING RETURNING accepted_at").bind(batch.device_id).bind(batch.batch_id).bind(&payload_hash).bind(batch.gps_samples.len() as i32).bind(batch.obd_samples.len() as i32).bind(batch.device_samples.len() as i32).fetch_optional(&mut *tx).await.map_err(db_err)?;
+    for event in &batch.trip_events {
+        let inserted = sqlx::query("INSERT INTO trip_events(event_id,trip_id,stop_id,kind,observed_at,latitude,longitude) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING")
+            .bind(event.event_id).bind(batch.trip.id).bind(event.stop_id).bind(&event.kind).bind(event.observed_at).bind(event.latitude).bind(event.longitude)
+            .execute(&mut *tx).await.map_err(db_err)?;
+        if inserted.rows_affected() == 0 {
+            let prior = sqlx::query("SELECT trip_id,stop_id,kind,observed_at,latitude,longitude FROM trip_events WHERE event_id=$1")
+                .bind(event.event_id).fetch_optional(&mut *tx).await.map_err(db_err)?;
+            let same = prior.is_some_and(|r| {
+                r.try_get::<Uuid, _>("trip_id").ok() == Some(batch.trip.id)
+                    && r.try_get::<Uuid, _>("stop_id").ok() == Some(event.stop_id)
+                    && r.try_get::<String, _>("kind").ok().as_deref() == Some(event.kind.as_str())
+                    && r.try_get::<DateTime<Utc>, _>("observed_at").ok() == Some(event.observed_at)
+                    && r.try_get::<f64, _>("latitude").ok() == Some(event.latitude)
+                    && r.try_get::<f64, _>("longitude").ok() == Some(event.longitude)
+            });
+            if !same {
+                return Err(err(
+                    StatusCode::CONFLICT,
+                    "trip_event_conflict",
+                    "eventId or stop event was already accepted with different data",
+                ));
+            }
+        }
+    }
+    let row=sqlx::query("INSERT INTO ingest_batches(device_id,batch_id,payload_sha256,gps_count,obd_count,device_count,event_count) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(device_id,batch_id) DO NOTHING RETURNING accepted_at").bind(batch.device_id).bind(batch.batch_id).bind(&payload_hash).bind(batch.gps_samples.len() as i32).bind(batch.obd_samples.len() as i32).bind(batch.device_samples.len() as i32).bind(batch.trip_events.len() as i32).fetch_optional(&mut *tx).await.map_err(db_err)?;
     let ack = if let Some(row) = row {
         Ack {
             batch_id: batch.batch_id,
@@ -612,11 +685,12 @@ async fn ingest(
             gps_accepted: batch.gps_samples.len() as i32,
             obd_accepted: batch.obd_samples.len() as i32,
             device_accepted: batch.device_samples.len() as i32,
+            events_accepted: batch.trip_events.len() as i32,
             received_at: row.try_get("accepted_at").map_err(db_err)?,
             schema_version: 1,
         }
     } else {
-        let r=sqlx::query("SELECT payload_sha256,gps_count,obd_count,device_count,accepted_at FROM ingest_batches WHERE device_id=$1 AND batch_id=$2").bind(batch.device_id).bind(batch.batch_id).fetch_one(&mut *tx).await.map_err(db_err)?;
+        let r=sqlx::query("SELECT payload_sha256,gps_count,obd_count,device_count,event_count,accepted_at FROM ingest_batches WHERE device_id=$1 AND batch_id=$2").bind(batch.device_id).bind(batch.batch_id).fetch_one(&mut *tx).await.map_err(db_err)?;
         let h: Vec<u8> = r.try_get("payload_sha256").map_err(db_err)?;
         if h != payload_hash {
             return Err(err(
@@ -631,6 +705,7 @@ async fn ingest(
             gps_accepted: r.try_get("gps_count").map_err(db_err)?,
             obd_accepted: r.try_get("obd_count").map_err(db_err)?,
             device_accepted: r.try_get("device_count").map_err(db_err)?,
+            events_accepted: r.try_get("event_count").map_err(db_err)?,
             received_at: r.try_get("accepted_at").map_err(db_err)?,
             schema_version: 1,
         }
@@ -1442,8 +1517,11 @@ async fn trips(
     Ok(Json(out))
 }
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct GpsParams {
     limit: Option<i64>,
+    after_at: Option<DateTime<Utc>>,
+    after_sample_id: Option<Uuid>,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1467,7 +1545,15 @@ async fn gps(
 ) -> Result<Json<Vec<GpsOut>>> {
     dashboard(&s.db, &headers).await?;
     let limit = q.limit.unwrap_or(5000).clamp(1, 10000);
-    let rows=sqlx::query("SELECT sample_id,observed_at,delta_sec,delta_m,latitude,longitude,altitude_m,speed_mps,bearing_deg,horizontal_accuracy_m FROM gps_samples WHERE trip_id=$1 ORDER BY observed_at,sample_id LIMIT $2").bind(trip).bind(limit).fetch_all(&s.db).await.map_err(db_err)?;
+    if q.after_at.is_some() != q.after_sample_id.is_some() {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "invalid_cursor",
+            "afterAt and afterSampleId must be supplied together",
+        ));
+    }
+    let rows=sqlx::query("SELECT sample_id,observed_at,delta_sec,delta_m,latitude,longitude,altitude_m,speed_mps,bearing_deg,horizontal_accuracy_m FROM gps_samples WHERE trip_id=$1 AND ($2::timestamptz IS NULL OR (observed_at,sample_id) > ($2,$3)) ORDER BY observed_at,sample_id LIMIT $4")
+        .bind(trip).bind(q.after_at).bind(q.after_sample_id).bind(limit).fetch_all(&s.db).await.map_err(db_err)?;
     let mut out = Vec::new();
     for r in rows {
         out.push(GpsOut {
@@ -1481,6 +1567,38 @@ async fn gps(
             speed_mps: r.try_get("speed_mps").map_err(db_err)?,
             bearing_deg: r.try_get("bearing_deg").map_err(db_err)?,
             horizontal_accuracy_m: r.try_get("horizontal_accuracy_m").map_err(db_err)?,
+        });
+    }
+    Ok(Json(out))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TripEventOut {
+    event_id: Uuid,
+    stop_id: Uuid,
+    kind: String,
+    observed_at: DateTime<Utc>,
+    latitude: f64,
+    longitude: f64,
+}
+async fn trip_events(
+    State(s): State<App>,
+    headers: HeaderMap,
+    Path(trip): Path<Uuid>,
+) -> Result<Json<Vec<TripEventOut>>> {
+    dashboard(&s.db, &headers).await?;
+    let rows = sqlx::query("SELECT event_id,stop_id,kind,observed_at,latitude,longitude FROM trip_events WHERE trip_id=$1 ORDER BY observed_at,event_id")
+        .bind(trip).fetch_all(&s.db).await.map_err(db_err)?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        out.push(TripEventOut {
+            event_id: r.try_get("event_id").map_err(db_err)?,
+            stop_id: r.try_get("stop_id").map_err(db_err)?,
+            kind: r.try_get("kind").map_err(db_err)?,
+            observed_at: r.try_get("observed_at").map_err(db_err)?,
+            latitude: r.try_get("latitude").map_err(db_err)?,
+            longitude: r.try_get("longitude").map_err(db_err)?,
         });
     }
     Ok(Json(out))
@@ -1856,6 +1974,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/vehicles/:vehicle_id/trips", get(trips))
         .route("/api/v1/vehicles/:vehicle_id/status", get(vehicle_status))
         .route("/api/v1/trips/:trip_id/gps", get(gps))
+        .route("/api/v1/trips/:trip_id/events", get(trip_events))
         .route("/api/v1/trips/:trip_id/metrics", get(metrics))
         .route("/api/v1/trips/:trip_id/telemetry-at", get(telemetry_at))
         .route("/api/v1/trips/:trip_id/metric-catalog", get(metric_catalog))

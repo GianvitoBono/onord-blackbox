@@ -2,15 +2,19 @@ package com.opnord.blackbox.sync
 
 import com.opnord.blackbox.obd.ObdPid
 import com.opnord.blackbox.storage.TelemetrySampleEntity
+import com.opnord.blackbox.storage.TripEventEntity
 import com.opnord.blackbox.storage.TripEntity
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
 
-data class EncodedBatch(val payload: String, val sampleIds: List<String>)
+data class EncodedBatch(val payload: String, val sampleIds: List<String>, val eventIds: List<String>)
 
 internal object BatchPayload {
-    fun encode(deviceId: String, batchId: String, trip: TripEntity, samples: List<TelemetrySampleEntity>): EncodedBatch {
+    fun encode(deviceId: String, batchId: String, trip: TripEntity, samples: List<TelemetrySampleEntity>): EncodedBatch =
+        encode(deviceId, batchId, trip, samples, emptyList())
+
+    fun encode(deviceId: String, batchId: String, trip: TripEntity, samples: List<TelemetrySampleEntity>, events: List<TripEventEntity>): EncodedBatch {
         val tripJson = JSONObject()
             .put("id", trip.id).put("startedAt", timestamp(trip.startedAt))
             .put("endedAt", trip.endedAt?.let(::timestamp) ?: JSONObject.NULL)
@@ -19,6 +23,12 @@ internal object BatchPayload {
         val gps = JSONArray()
         val obd = JSONArray()
         val device = JSONArray()
+        val tripEvents = JSONArray()
+        events.forEach { event ->
+            tripEvents.put(JSONObject().put("eventId", event.eventId).put("stopId", event.stopId)
+                .put("kind", event.kind).put("observedAt", timestamp(event.observedAt))
+                .put("latitude", event.latitude).put("longitude", event.longitude))
+        }
         samples.forEach { sample ->
             if (sample.latitude != null && sample.longitude != null) {
                 gps.put(JSONObject().put("sampleId", sample.id).put("observedAt", timestamp(sample.timestamp))
@@ -63,7 +73,8 @@ internal object BatchPayload {
         }
         val body = JSONObject().put("schemaVersion", 1).put("deviceId", deviceId).put("batchId", batchId)
             .put("trip", tripJson).put("gpsSamples", gps).put("obdSamples", obd).put("deviceSamples", device)
-        return EncodedBatch(body.toString(), samples.map { it.id })
+            .put("tripEvents", tripEvents)
+        return EncodedBatch(body.toString(), samples.map { it.id }, events.map { it.eventId })
     }
 
     private fun timestamp(millis: Long) = Instant.ofEpochMilli(millis).toString()

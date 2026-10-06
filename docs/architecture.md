@@ -2,19 +2,19 @@
 
 ## Decisions
 
-MVP uses a foreground location-type service as owner of trip lifecycle and sampling. User starts persistent monitor from visible activity once; service dynamically receives power broadcasts and reconciles current charging state. GPS request runs only during a trip. Android stock restricts cold foreground-service starts from background, so a manifest power receiver alone cannot reliably launch a location logger. Automatic boot after force-stop remains outside stock MVP. Room is source of truth with WAL. GPS and battery currently use nullable timestamped samples; OBD will use a separate collector and likely a separate local stream before M2 sync.
+Foreground location service owns trip lifecycle and sampling. User starts persistent monitor from visible activity once. Idle GPS runs at 15-second requested interval; confirmed movement opens a trip and switches to 1-second GPS plus OBD/battery sampling. Recent idle fixes are saved with the new trip, preserving its start. USB power remains a sampled diagnostic value and never opens or closes a trip. Android stock restricts cold foreground-service starts from background; automatic boot after force-stop remains outside stock MVP. Room with WAL remains source of truth.
 
-Power is a useful installation trigger, not a reliable ignition signal. A fixed 90-second grace period is used initially. On process recovery, an orphan ACTIVE trip is closed as `unexpected_shutdown`; silently resuming risks joining separate drives. GPS uses Fused Location at a requested 1 Hz and persists each fix; a separate 1 Hz battery sample captures charging level and temperature. Android 11+ background location requires explicit user grant through app settings. OxygenOS may still kill the resident service; physical testing must measure this behavior.
+Stationary GPS for two minutes creates `stop_start`; renewed motion creates matching `stop_end` with same `stopId`. Only 90 continuous minutes stationary close trip and its open stop. Missing GPS alone does not prove vehicle stopped. On process recovery, recent active trip is resumed; trip with last fix older than 90 minutes is closed as `recovery_timeout`. This prevents engine stop/start, refueling and short breaks from splitting journeys. Motion thresholds and OxygenOS behavior need calibration with road traces. Android 11+ background location needs explicit grant.
 
-Sync stores immutable UUID batches and payloads in Room, then WorkManager uploads over HTTPS only when Wi-Fi is active; samples become synced only after matching ACK. Device ID and endpoint are local configuration; token is encrypted by Android Keystore. No analytics/cloud SDK. WorkManager is a background retry mechanism and does not drive logger lifecycle.
+Sync stores immutable UUID batches and payloads in Room, then WorkManager uploads over HTTPS only when Wi-Fi is active; samples and stop boundaries become synced only after matching ACK. Device ID and endpoint are local configuration; token is encrypted by Android Keystore. Old pending batches remain readable after Room v4→v5 migration. New `tripEvents` payloads require server migration 0007 first; old Android payloads remain valid on new backend. No analytics/cloud SDK. WorkManager does not drive logger lifecycle.
 
 Backend plan: Rust/Axum/SQLx with TimescaleDB, React/TypeScript/Vite dashboard. `backend-architecture.md` defines vehicle/trip model and ingest protocol; `backend-schema.sql` contains draft SQL. Current Android entity is a transitional wide sample and must evolve before OBD sync.
 
 ## Layers
 
-- `service`: dynamic power broadcast monitoring and current power state.
+- `service`: foreground monitor, GPS sampling modes, OBD and battery collection.
 - `sync`: persisted outbox, WorkManager and HTTPS API client.
-- `trip`: pure state machine.
+- `trip`: GPS movement and stop detector.
 - `storage`: Room entities/DAOs, WAL.
 - `location`: Fused Location behind collector interface; `obd`: future transport boundary.
 - `ui`: diagnostics and configuration.
