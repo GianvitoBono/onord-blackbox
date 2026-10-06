@@ -15,6 +15,7 @@ CARGO_HOME=../.cache/cargo CARGO_TARGET_DIR=../.cache/cargo-target cargo run
 ```
 
 After migrations, run `cargo run --bin provision_dashboard` with `DATABASE_URL` set. This creates a local `admin` user with random password in `.data/dashboard-login.txt` at the repository root (mode `0600`). `cargo run --bin provision_dashboard -- --reset` rotates it and revokes sessions. Passwords are Argon2id hashes in `dashboard_users`; opaque 12-hour session cookies are HttpOnly and SameSite=Strict, with only SHA-256 session hashes stored in `dashboard_sessions`. Cookie `Secure` defaults to true. `DASHBOARD_COOKIE_SECURE=false` is accepted only with loopback `BIND_ADDR` for local HTTP. Public deployment needs HTTPS termination and login rate limiting.
+For the isolated `compose.local.yaml` stack, `DASHBOARD_LOCAL_HTTP_CONTAINER=true` additionally allows an internal Docker bind with insecure cookies; only its Caddy port is published to host loopback. Never set this override on an internet-facing deployment.
 
 `/healthz` is process liveness; `/readyz` returns 503 until PostgreSQL responds. Put server-generated device token hashes in `devices.token_hash`: SHA-256 of the exact raw bearer token bytes. The token itself is never stored or logged by this service. Create a matching open row in `device_vehicle_assignments` for each assigned device.
 

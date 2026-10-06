@@ -6,6 +6,7 @@
 .env.*
 !.env.example
 !.env.server.example
+!.env.local.example
 .idea/
 node_modules/
 dist/

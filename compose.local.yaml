@@ -1,0 +1,70 @@
+name: opnord-blackbox-local
+
+services:
+  timescaledb:
+    image: timescale/timescaledb-ha:pg17.11-ts2.30.0
+    environment:
+      POSTGRES_USER: blackbox
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.local}
+      POSTGRES_DB: blackbox
+    volumes:
+      - local_timescaledb_data:/home/postgres/pgdata/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    networks: [private]
+
+  backend:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    environment:
+      DATABASE_URL: postgres://blackbox:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.local}@timescaledb:5432/blackbox
+      BIND_ADDR: 0.0.0.0:8080
+      DASHBOARD_USERNAME: admin
+      DASHBOARD_COOKIE_SECURE: "false"
+      DASHBOARD_LOCAL_HTTP_CONTAINER: "true"
+      DASHBOARD_CREDENTIALS_FILE: /var/lib/blackbox/dashboard-login.txt
+      DEVICE_CREDENTIALS_FILE: /var/lib/blackbox/device-credentials.json
+      VEHICLE_NAME: Giulietta
+      DEVICE_NAME: OnePlus Nord
+    volumes:
+      - local_dashboard_secrets:/var/lib/blackbox
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+    networks: [private]
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/web.Dockerfile
+    ports:
+      - "127.0.0.1:${LOCAL_HTTP_PORT:-8088}:80"
+    volumes:
+      - ./deploy/Caddyfile.local:/etc/caddy/Caddyfile:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [private]
+
+networks:
+  private:
+
+volumes:
+  local_timescaledb_data:
+  local_dashboard_secrets:

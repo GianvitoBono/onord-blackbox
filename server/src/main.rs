@@ -1015,8 +1015,14 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let cookie_secure = std::env::var("DASHBOARD_COOKIE_SECURE")
         .unwrap_or_else(|_| "true".into())
         .parse::<bool>()?;
-    if !cookie_secure && !addr.ip().is_loopback() {
-        return Err("DASHBOARD_COOKIE_SECURE=false requires loopback BIND_ADDR".into());
+    let local_http_container = std::env::var("DASHBOARD_LOCAL_HTTP_CONTAINER")
+        .unwrap_or_else(|_| "false".into())
+        .parse::<bool>()?;
+    if !cookie_secure && !addr.ip().is_loopback() && !local_http_container {
+        return Err(
+            "DASHBOARD_COOKIE_SECURE=false requires loopback BIND_ADDR or DASHBOARD_LOCAL_HTTP_CONTAINER=true"
+                .into(),
+        );
     }
     let db = PgPoolOptions::new()
         .max_connections(10)
