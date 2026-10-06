@@ -196,7 +196,7 @@ export default function App() {
 </span>}{signedIn && <button className="quiet-button" onClick={() => void signOut()}>Esci</button>}
 </div>
 </header>
-      <div className="page-content">
+      <div className={`page-content${page === 'explore' && signedIn ? ' page-content--explore' : ''}`}>
 {!authReady ? <div className="center-state">Controllo sessione…</div> : !signedIn ? <section className="login-layout">
 <div className="login-graphic">
 <div className="graphic-grid" />

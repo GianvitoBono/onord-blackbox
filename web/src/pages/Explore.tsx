@@ -1,4 +1,4 @@
-import { useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
+import { useEffect, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react'
 import { updateMetricDefinition, type GpsSample, type MetricDefinition, type MetricSample, type Trip, type TripEvent } from '../api'
 import TripMap from '../components/TripMap'
 import TelemetryChart from '../components/TelemetryChart'
@@ -16,6 +16,16 @@ function stopDuration(events: TripEvent[], event: TripEvent): string {
 }
 
 export default function Explore({ trips, tripId, setTripId, selectedTrip, detailError, detailLoading, onRefresh, gps, events, displayPoint, setHoverPoint, setSelectedPoint, displayStopEvent, setHoverStopEvent, setSelectedStopEvent, nearby, nearbyLoading, catalog, metricName, setMetricName, metrics, selectedMetric }: Props) {
+  const [inspectorOpen, setInspectorOpen] = useState(false)
+  useEffect(() => { setInspectorOpen(false) }, [tripId])
+  useEffect(() => {
+    if (!inspectorOpen) return
+    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') setInspectorOpen(false) }
+    window.addEventListener('keydown', close)
+    return () => window.removeEventListener('keydown', close)
+  }, [inspectorOpen])
+  const selectPoint = (sample: GpsSample) => { setHoverPoint(null); setHoverStopEvent(null); setSelectedStopEvent(null); setSelectedPoint(sample); setInspectorOpen(true) }
+  const selectStop = (event: TripEvent) => { setHoverPoint(null); setHoverStopEvent(null); setSelectedPoint(null); setSelectedStopEvent(event); setInspectorOpen(true) }
   const [editingMetric, setEditingMetric] = useState(false)
   const [displayName, setDisplayName] = useState('')
   const [unit, setUnit] = useState('')
@@ -48,7 +58,7 @@ export default function Explore({ trips, tripId, setTripId, selectedTrip, detail
 <div>
 <span className="eyebrow">ANALISI PERCORSO</span>
 <h1>Esplora</h1>
-<p>Mappa e segnali sincronizzati. Passa sui punti per vedere i dati.</p>
+<p>Traccia del viaggio. Clicca la linea per aprire misure e segnali.</p>
 </div>
 <div className="explore-controls"><button className="outline-button" type="button" onClick={onRefresh} disabled={detailLoading}>{detailLoading ? 'Aggiornamento…' : '↻ Aggiorna dati'}</button><select className="trip-selector" aria-label="Seleziona viaggio" value={tripId} onChange={e => setTripId(e.target.value)}>
 {trips.length === 0 && <option value="">Nessun viaggio</option>}{trips.map(t => <option key={t.id} value={t.id}>
@@ -74,9 +84,12 @@ export default function Explore({ trips, tripId, setTripId, selectedTrip, detail
 </span>
 </div>
 <div className="large-map">
-<TripMap samples={gps} events={events} selectedSampleId={displayPoint?.sampleId} onPointHover={setHoverPoint} onPointSelect={setSelectedPoint} onEventHover={setHoverStopEvent} onEventSelect={setSelectedStopEvent} />
+<TripMap samples={gps} events={events} selectedSampleId={displayPoint?.sampleId} onPointHover={setHoverPoint} onPointSelect={selectPoint} onEventHover={setHoverStopEvent} onEventSelect={selectStop} />
 </div>
 </div>
+{inspectorOpen && <div className="explore-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setInspectorOpen(false) }}>
+<div className="explore-modal" role="dialog" aria-modal="true" aria-label="Misure del percorso">
+<div className="explore-modal-top"><strong>Misure del percorso</strong><button type="button" className="outline-button" onClick={() => setInspectorOpen(false)} aria-label="Chiudi misure">Chiudi ×</button></div>
 <aside className="point-inspector">
 <span className="eyebrow">PUNTO SELEZIONATO</span>
 {displayStopEvent && <section className="stop-inspector" aria-label="Evento sosta selezionato">
@@ -141,7 +154,6 @@ export default function Explore({ trips, tripId, setTripId, selectedTrip, detail
 <p>{displayStopEvent ? 'Passa sulla traccia o seleziona un punto GPS per vedere velocità e telemetria.' : 'Passa il mouse sulla traccia o seleziona un punto per ispezionarlo.'}</p>
 </div>}
 </aside>
-</div>
 <section className="chart-section">
 <div className="section-head">
 <div>
@@ -161,8 +173,11 @@ export default function Explore({ trips, tripId, setTripId, selectedTrip, detail
 <button className="outline-button" type="button" onClick={() => setEditingMetric(false)}>Annulla</button>
 </form>}
 {metricMessage && <p className="metric-message" role="status">{metricMessage}</p>}
-{catalog.length ? <TelemetryChart samples={metrics} unit={selectedMetric?.unit || ''} selectedAt={displayPoint?.observedAt} onHoverAt={at => setHoverPoint(at ? nearestGps(gps, at) : null)} onSelectAt={at => { const point = nearestGps(gps, at); if (point) setSelectedPoint(point) }} /> : <div className="empty-message">Nessun segnale per questo viaggio.</div>}
+{catalog.length ? <TelemetryChart samples={metrics} unit={selectedMetric?.unit || ''} selectedAt={displayPoint?.observedAt} onHoverAt={at => setHoverPoint(at ? nearestGps(gps, at) : null)} onSelectAt={at => { const point = nearestGps(gps, at); if (point) selectPoint(point) }} /> : <div className="empty-message">Nessun segnale per questo viaggio.</div>}
 </section>
+</div>
+</div>}
+</div>
 </>
   )
 }
