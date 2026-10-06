@@ -8,7 +8,7 @@ Eseguire `npm install` e `npm run dev` dalla cartella `web`. Vite inoltra `/api`
 
 ## Interfaccia
 
-Menu laterale: riepilogo, viaggi, mappa e telemetria, mezzi, amministrazione, impostazioni. Il mezzo selezionato resta salvato nel browser. La mappa carica i singoli punti GPS di un tour, consente di ispezionarli con il mouse e mostra le letture OBD temporalmente vicine. La vista Esplora aggiorna viaggio, punti e metriche ogni 30 secondi; il pulsante «Aggiorna dati» forza il caricamento. Il grafico permette ispezione, selezione e zoom temporale. I temi chiaro e scuro seguono inizialmente il sistema; la scelta nelle impostazioni resta salvata nel browser.
+Menu laterale: riepilogo, viaggi, mappa Esplora, pagina Metriche, mezzi, amministrazione, impostazioni. Il mezzo selezionato resta salvato nel browser. Esplora riempie il pannello con la traccia GPS e le frecce di direzione; il clic sulla linea apre misure, segnali vicini e grafico in una finestra. Metriche mostra più grafici per lo stesso viaggio, con intervallo temporale e cursore condivisi; si possono aggiungere e rimuovere segnali, trascinare per zoom e scegliere 15 minuti, 1 ora o tutto il viaggio. Ogni grafico legge al massimo 5.000 campioni e segnala quando raggiunge il limite. Le viste Esplora e Metriche aggiornano i dati ogni 30 secondi. I temi chiaro e scuro seguono inizialmente il sistema; la scelta nelle impostazioni resta salvata nel browser.
 
 ## Mappa
 

@@ -9,6 +9,7 @@ type Props = {
   selectedAt?: string | null
   onHoverAt?: (iso: string | null) => void
   onSelectAt?: (iso: string) => void
+  onZoom?: (from: number, to: number) => void
 }
 
 const W = 900
@@ -26,7 +27,7 @@ function niceStep(span: number, ticks = 5) {
   return (factor <= 1 ? 1 : factor <= 2 ? 2 : factor <= 5 ? 5 : 10) * magnitude
 }
 
-export default function TelemetryChart({ samples, unit, selectedAt, onHoverAt, onSelectAt }: Props) {
+export default function TelemetryChart({ samples, unit, selectedAt, onHoverAt, onSelectAt, onZoom }: Props) {
   const rootRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
   const dragRef = useRef<{ x: number; current: number } | null>(null)
@@ -110,6 +111,7 @@ export default function TelemetryChart({ samples, unit, selectedAt, onHoverAt, o
     if (Math.abs(current - x) > 8) {
       const a = timeAtX(Math.min(x, current)), b = timeAtX(Math.max(x, current))
       setBrush([a, b])
+      onZoom?.(a, b)
       setHoverIndex(null)
       onHoverAt?.(null)
     }

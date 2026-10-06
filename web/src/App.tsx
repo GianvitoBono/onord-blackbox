@@ -3,6 +3,7 @@ import { ApiError, approvePendingDevice, fetchDevices, fetchPendingDevices, fetc
 import Overview from './pages/Overview'
 import Journeys from './pages/Journeys'
 import Explore from './pages/Explore'
+import MetricsDashboard from './pages/MetricsDashboard'
 import Fleet from './pages/Fleet'
 import Admin from './pages/Admin'
 import Settings from './pages/Settings'
@@ -133,7 +134,7 @@ export default function App() {
     return () => controller.abort()
   }, [tripId, refreshTick])
   useEffect(() => { if (!tripId || !metricName || !selectedTrip) { setMetrics([]); return }; const controller = new AbortController(); void fetchTripMetricSamples(tripId, metricName, selectedTrip.startedAt, selectedTrip.endedAt || new Date().toISOString(), controller.signal).then(setMetrics).catch(e => { if (!controller.signal.aborted) setDetailError(message(e)) }); return () => controller.abort() }, [tripId, metricName, selectedTrip, refreshTick])
-  useEffect(() => { if (page !== 'explore' || !signedIn) return; const timer = window.setInterval(() => setRefreshTick(value => value + 1), 30_000); return () => window.clearInterval(timer) }, [page, signedIn])
+  useEffect(() => { if ((page !== 'explore' && page !== 'metrics') || !signedIn) return; const timer = window.setInterval(() => setRefreshTick(value => value + 1), 30_000); return () => window.clearInterval(timer) }, [page, signedIn])
   useEffect(() => { if (!tripId || !displayPoint) { setNearby([]); return }; const controller = new AbortController(); const point = displayPoint; setNearbyLoading(true); const timer = window.setTimeout(() => { void fetchTripTelemetryAt(tripId, point.observedAt, 2000, controller.signal).then(rows => { if (!controller.signal.aborted) setNearby(rows) }).catch(() => { if (!controller.signal.aborted) setNearby([]) }).finally(() => { if (!controller.signal.aborted) setNearbyLoading(false) }) }, 200); return () => { clearTimeout(timer); controller.abort() } }, [tripId, displayPoint?.sampleId])
   useEffect(() => { if (selectedId) localStorage.setItem('opnord.vehicle', selectedId) }, [selectedId])
   useEffect(() => { document.documentElement.dataset.theme = theme; document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#17211d' : '#f5f6f3'); try { localStorage.setItem('opnord.theme', theme) } catch { /* Theme still works for this tab. */ } }, [theme])
@@ -170,11 +171,11 @@ export default function App() {
 </a>
 <div className="nav-caption">WORKSPACE</div>
 <nav aria-label="Navigazione principale">
-{pages.slice(0, 4).map(nav)}
+{pages.slice(0, 5).map(nav)}
 </nav>
 <div className="nav-caption nav-caption-lower">SISTEMA</div>
 <nav aria-label="Gestione">
-{pages.slice(4).map(nav)}
+{pages.slice(5).map(nav)}
 </nav>
 <div className="sidebar-bottom">
 <span className="live-dot" /> TELEMETRIA PRIVATA</div>
@@ -232,6 +233,7 @@ export default function App() {
         {page === 'overview' && <Overview selectedVehicle={selectedVehicle} trips={trips} totalDistance={totalDistance} detailLoading={detailLoading} deviceFresh={deviceFresh} updatedAt={updatedAt} loading={loading} loadFleet={refreshAll} openTrip={openTrip} />}
         {page === 'journeys' && <Journeys selectedVehicle={selectedVehicle} trips={trips} detailLoading={detailLoading} openTrip={openTrip} />}
         {page === 'explore' && <Explore tripId={tripId} detailError={detailError} onRefresh={() => setRefreshTick(value => value + 1)} gps={gps} events={tripEvents} displayPoint={displayPoint} setHoverPoint={setHoverPoint} setSelectedPoint={setSelectedPoint} displayStopEvent={displayStopEvent} setHoverStopEvent={setHoverStopEvent} setSelectedStopEvent={setSelectedStopEvent} nearby={nearby} nearbyLoading={nearbyLoading} catalog={catalog} metricName={metricName} setMetricName={setMetricName} metrics={metrics} selectedMetric={selectedMetric} />}
+        {page === 'metrics' && <MetricsDashboard vehicle={selectedVehicle} trips={trips} tripId={tripId} setTripId={setTripId} selectedTrip={selectedTrip} catalog={catalog} detailLoading={detailLoading} detailError={detailError} onRefresh={() => setRefreshTick(value => value + 1)} now={now} />}
         {page === 'fleet' && <Fleet vehicles={vehicles} devices={devices} selectedId={selectedId} selectedVehicle={selectedVehicle} selectedDevice={selectedDevice} deviceFresh={deviceFresh} vehicleStatus={vehicleStatus} statusError={statusError} ecuIdentity={ecuIdentity} ecuIdentityError={ecuIdentityError} vehicleMessage={vehicleMessage} vehicleEditing={vehicleEditing} vehicleForm={vehicleForm} setVehicleForm={setVehicleForm} vehicleBusy={vehicleBusy} saveVehicle={saveVehicle} editVehicle={editVehicle} setVehicleEditing={setVehicleEditing} selectVehicle={selectVehicle} openTrip={openTrip} now={now} />}
         {page === 'admin' && <Admin vehicles={vehicles} devices={devices} pending={pending} adminMessage={adminMessage} adminVehicle={adminVehicle} setAdminVehicle={setAdminVehicle} adminName={adminName} setAdminName={setAdminName} adminPassword={adminPassword} setAdminPassword={setAdminPassword} adminBusy={adminBusy} tokenMode={tokenMode} setTokenMode={setTokenMode} customToken={customToken} setCustomToken={setCustomToken} issuedToken={issuedToken} approve={approve} rotate={rotate} loadFleet={loadFleet} />}
         {page === 'settings' && <Settings theme={theme} setTheme={setTheme} signedIn={signedIn} updatedAt={updatedAt} />}

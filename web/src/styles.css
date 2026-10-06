@@ -1325,3 +1325,54 @@ a {
   .explore-modal-backdrop { padding:8px }
   .explore-modal { max-height:calc(100dvh - 16px); padding:16px }
 }
+
+/* Dense, synchronized telemetry workspace. */
+.metrics-dashboard { min-width:0 }
+.metrics-heading { margin-bottom:20px }
+.metrics-toolbar {
+  display:flex;
+  align-items:end;
+  gap:12px;
+  flex-wrap:wrap;
+  padding:14px 16px;
+  border:1px solid var(--line);
+  border-radius:8px;
+  background:#fff;
+}
+.metrics-toolbar label { display:grid; gap:5px; color:var(--muted); font-size:11px; font-weight:700 }
+.metrics-toolbar select { min-width:195px; max-width:300px; border:1px solid var(--line); border-radius:5px; padding:9px 11px; background:#fff; color:var(--ink); font-size:12px }
+.metrics-toolbar .trip-selector { min-width:230px }
+.metrics-time-choices { display:flex; gap:3px; padding:3px; border:1px solid var(--line); border-radius:6px; background:#f2f5f2 }
+.metrics-time-choices button { border:0; border-radius:4px; background:transparent; color:var(--muted); font-size:12px; font-weight:700; padding:8px 10px }
+.metrics-time-choices button.selected { background:#087d75; color:#fff }
+.metrics-range { display:flex; justify-content:space-between; gap:12px; padding:13px 2px; color:var(--ink); font-size:12px; font-weight:700 }
+.metrics-range span { color:var(--muted); font-weight:400 }
+.metrics-picks { display:flex; flex-wrap:wrap; gap:7px; margin:0 0 14px }
+.metrics-picks button { display:flex; align-items:center; gap:9px; border:1px solid var(--line); border-radius:20px; background:#eaf3ee; color:#285046; padding:6px 10px; font-size:11px; font-weight:700 }
+.metrics-picks span { font-size:15px; line-height:1 }
+.metrics-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px }
+.metric-panel { min-width:0; border:1px solid var(--line); border-radius:8px; background:#fff; padding:16px; box-shadow:0 2px 12px #102b2110 }
+.metric-panel-head { display:flex; align-items:start; justify-content:space-between; gap:14px; min-height:55px }
+.metric-panel-head h2 { font:800 15px Manrope,sans-serif; margin:0 0 3px; color:var(--ink) }
+.metric-panel-head code { color:var(--muted); font-size:10px; overflow-wrap:anywhere }
+.metric-panel-head strong { white-space:nowrap; font:800 20px Manrope,sans-serif; color:var(--teal) }
+.metric-panel-head small { font-size:11px; color:var(--muted) }
+.metric-panel-stats { display:flex; gap:16px; border-top:1px solid var(--line); padding:9px 0 11px; color:var(--muted); font-size:11px }
+.metric-panel-stats b { color:var(--ink); margin-left:4px }
+.metric-panel .telemetry-chart { border:0; border-radius:0; padding:4px 0 0 }
+.metric-panel .telemetry-chart__topline span:nth-child(2) { display:none }
+.metric-panel-state { min-height:240px; display:grid; place-items:center; color:var(--muted); font-size:13px }
+.metric-panel-limit { color:#a06927; font-size:11px; margin:8px 0 0 }
+[data-theme='dark'] .metrics-toolbar,[data-theme='dark'] .metric-panel { background:#1e2b24; border-color:var(--line) }
+[data-theme='dark'] .metrics-toolbar select { background:#1e2b24; border-color:var(--line) }
+[data-theme='dark'] .metrics-time-choices { background:#17231c; border-color:var(--line) }
+[data-theme='dark'] .metrics-picks button { background:#294236; border-color:#486553; color:#dbf0e2 }
+@media(max-width:1200px) { .metrics-grid { grid-template-columns:1fr } }
+@media(max-width:640px) {
+  .metrics-toolbar { align-items:stretch }
+  .metrics-toolbar label { flex:1 1 100% }
+  .metrics-toolbar select,.metrics-toolbar .trip-selector { width:100%; max-width:none }
+  .metrics-range { flex-direction:column; gap:3px }
+  .metric-panel { padding:11px }
+  .metric-panel-stats { gap:9px; flex-wrap:wrap }
+}

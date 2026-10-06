@@ -242,7 +242,7 @@ export async function fetchTripMetricCatalog(tripId: string, signal?: AbortSigna
     .filter((metric) => typeof metric.name === 'string' && typeof metric.unit === 'string')
 }
 
-export async function fetchTripMetricSamples(tripId: string, name: string, from: string, to: string, signal?: AbortSignal): Promise<MetricSample[]> {
-  const params = new URLSearchParams({ name, from, to, limit: '2000' })
+export async function fetchTripMetricSamples(tripId: string, name: string, from: string, to: string, signal?: AbortSignal, limit = 2000): Promise<MetricSample[]> {
+  const params = new URLSearchParams({ name, from, to, limit: String(limit) })
   return unwrapList<MetricSample>(await request<unknown>(`/api/v1/trips/${encodeURIComponent(tripId)}/metrics?${params}`, { signal }))
 }
