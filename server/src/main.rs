@@ -172,6 +172,61 @@ fn log_ingest_auth_failure(batch: &Batch, reason: &'static str) {
     );
 }
 
+fn valid_device_token(token: &str) -> bool {
+    (16..=128).contains(&token.len())
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
+
+async fn record_failed_device(
+    db: &PgPool,
+    batch: &Batch,
+    token_hash: &[u8],
+    candidate_token_eligible: bool,
+    reason: &'static str,
+) {
+    let result = async {
+        sqlx::query("DELETE FROM pending_device_auth WHERE last_seen_at < now() - interval '7 days'")
+            .execute(db)
+            .await?;
+        sqlx::query(
+            "INSERT INTO pending_device_auth(device_id,candidate_token_hash,candidate_token_eligible,reason,last_batch_id)
+             SELECT $1,$2,$3,$4,$5
+             WHERE EXISTS (SELECT 1 FROM pending_device_auth WHERE device_id=$1)
+                OR (SELECT count(*) FROM pending_device_auth) < 200
+             ON CONFLICT(device_id) DO UPDATE SET
+                candidate_token_hash=EXCLUDED.candidate_token_hash,
+                candidate_token_eligible=EXCLUDED.candidate_token_eligible,
+                reason=EXCLUDED.reason,
+                last_seen_at=now(),
+                attempt_count=LEAST(pending_device_auth.attempt_count::bigint + 1, 2147483647)::integer,
+                last_batch_id=EXCLUDED.last_batch_id",
+        )
+        .bind(batch.device_id)
+        .bind(token_hash)
+        .bind(candidate_token_eligible)
+        .bind(reason)
+        .bind(batch.batch_id)
+        .execute(db)
+        .await?;
+        Ok::<(), sqlx::Error>(())
+    }
+    .await;
+    if let Err(error) = result {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "timestamp": Utc::now(),
+                "level": "error",
+                "event": "pending_device_record_failed",
+                "deviceId": batch.device_id,
+                "error": error.to_string(),
+            })
+        );
+    }
+}
+
 async fn log_request(request: Request, next: Next) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
@@ -219,6 +274,7 @@ async fn ingest(
             )
         })?;
     let token_hash = Sha256::digest(token.as_bytes()).to_vec();
+    let candidate_token_eligible = valid_device_token(token);
     let mut tx = s.db.begin().await.map_err(db_err)?;
     let device = sqlx::query(
         "SELECT vehicle_id, token_hash, token_revoked_at FROM devices WHERE id=$1 FOR SHARE",
@@ -226,18 +282,36 @@ async fn ingest(
     .bind(batch.device_id)
     .fetch_optional(&mut *tx)
     .await
-    .map_err(db_err)?
-    .ok_or_else(|| {
+    .map_err(db_err)?;
+    let Some(device) = device else {
         log_ingest_auth_failure(&batch, "unknown_device_id");
-        err(
+        tx.rollback().await.map_err(db_err)?;
+        record_failed_device(
+            &s.db,
+            &batch,
+            &token_hash,
+            candidate_token_eligible,
+            "unknown_device_id",
+        )
+        .await;
+        return Err(err(
             StatusCode::UNAUTHORIZED,
             "unauthorized",
             "invalid device token",
-        )
-    })?;
+        ));
+    };
     let revoked_at: Option<DateTime<Utc>> = device.try_get("token_revoked_at").map_err(db_err)?;
     if revoked_at.is_some() {
         log_ingest_auth_failure(&batch, "device_revoked");
+        tx.rollback().await.map_err(db_err)?;
+        record_failed_device(
+            &s.db,
+            &batch,
+            &token_hash,
+            candidate_token_eligible,
+            "device_revoked",
+        )
+        .await;
         return Err(err(
             StatusCode::UNAUTHORIZED,
             "unauthorized",
@@ -247,12 +321,26 @@ async fn ingest(
     let stored_hash: Vec<u8> = device.try_get("token_hash").map_err(db_err)?;
     if stored_hash != token_hash {
         log_ingest_auth_failure(&batch, "token_mismatch");
+        tx.rollback().await.map_err(db_err)?;
+        record_failed_device(
+            &s.db,
+            &batch,
+            &token_hash,
+            candidate_token_eligible,
+            "token_mismatch",
+        )
+        .await;
         return Err(err(
             StatusCode::UNAUTHORIZED,
             "unauthorized",
             "invalid device token",
         ));
     }
+    sqlx::query("DELETE FROM pending_device_auth WHERE device_id=$1")
+        .bind(batch.device_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
     let vehicle_id: Uuid = device
         .try_get::<Option<Uuid>, _>("vehicle_id")
         .map_err(db_err)?
@@ -833,6 +921,214 @@ async fn devices(State(s): State<App>, headers: HeaderMap) -> Result<Json<Vec<Da
         .map(Json)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingDeviceView {
+    device_id: Uuid,
+    reason: String,
+    first_seen_at: DateTime<Utc>,
+    last_seen_at: DateTime<Utc>,
+    attempt_count: i32,
+    last_batch_id: Uuid,
+    vehicle_id: Option<Uuid>,
+    display_name: Option<String>,
+    approvable: bool,
+}
+
+async fn pending_devices(
+    State(s): State<App>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<PendingDeviceView>>> {
+    dashboard(&s.db, &headers).await?;
+    let rows = sqlx::query(
+        "SELECT p.device_id,p.reason,p.first_seen_at,p.last_seen_at,p.attempt_count,
+                p.last_batch_id,p.candidate_token_eligible,d.id AS registered_device_id,
+                d.vehicle_id,d.display_name
+         FROM pending_device_auth p LEFT JOIN devices d ON d.id=p.device_id
+         WHERE p.last_seen_at >= now() - interval '7 days'
+         ORDER BY p.last_seen_at DESC LIMIT 200",
+    )
+    .fetch_all(&s.db)
+    .await
+    .map_err(db_err)?;
+    rows.into_iter()
+        .map(|row| {
+            let reason: String = row.try_get("reason").map_err(db_err)?;
+            let eligible: bool = row.try_get("candidate_token_eligible").map_err(db_err)?;
+            let registered: Option<Uuid> = row.try_get("registered_device_id").map_err(db_err)?;
+            Ok(PendingDeviceView {
+                device_id: row.try_get("device_id").map_err(db_err)?,
+                approvable: reason == "unknown_device_id" && eligible && registered.is_none(),
+                reason,
+                first_seen_at: row.try_get("first_seen_at").map_err(db_err)?,
+                last_seen_at: row.try_get("last_seen_at").map_err(db_err)?,
+                attempt_count: row.try_get("attempt_count").map_err(db_err)?,
+                last_batch_id: row.try_get("last_batch_id").map_err(db_err)?,
+                vehicle_id: row.try_get("vehicle_id").map_err(db_err)?,
+                display_name: row.try_get("display_name").map_err(db_err)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(Json)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ApprovePendingDeviceBody {
+    password: String,
+    vehicle_id: Uuid,
+    display_name: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApprovedDeviceView {
+    device_id: Uuid,
+    vehicle_id: Uuid,
+    display_name: String,
+}
+
+async fn approve_pending_device(
+    State(s): State<App>,
+    Path(device_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(body): Json<ApprovePendingDeviceBody>,
+) -> Result<Json<ApprovedDeviceView>> {
+    let auth = dashboard(&s.db, &headers).await?;
+    let display_name = body.display_name.trim().to_owned();
+    if display_name.is_empty() || display_name.len() > 120 {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "invalid_display_name",
+            "device display name must be 1-120 characters",
+        ));
+    }
+    confirm_dashboard_password(&s.db, &auth.username, body.password).await?;
+    let mut tx = s.db.begin().await.map_err(db_err)?;
+    let pending = sqlx::query(
+        "SELECT candidate_token_hash,candidate_token_eligible,reason FROM pending_device_auth
+         WHERE device_id=$1 AND last_seen_at >= now() - interval '7 days' FOR UPDATE",
+    )
+    .bind(device_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(db_err)?
+    .ok_or_else(|| {
+        err(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "pending device not found",
+        )
+    })?;
+    let reason: String = pending.try_get("reason").map_err(db_err)?;
+    let eligible: bool = pending
+        .try_get("candidate_token_eligible")
+        .map_err(db_err)?;
+    if reason != "unknown_device_id" || !eligible {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "not_approvable",
+            "device must be unknown and use a valid token",
+        ));
+    }
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM devices WHERE id=$1)")
+        .bind(device_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db_err)?;
+    if exists {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "device_exists",
+            "device already exists",
+        ));
+    }
+    let vehicle_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM vehicles WHERE id=$1)")
+            .bind(body.vehicle_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db_err)?;
+    if !vehicle_exists {
+        return Err(err(StatusCode::NOT_FOUND, "not_found", "vehicle not found"));
+    }
+    let token_hash: Vec<u8> = pending.try_get("candidate_token_hash").map_err(db_err)?;
+    sqlx::query("INSERT INTO devices(id,vehicle_id,display_name,token_hash) VALUES($1,$2,$3,$4)")
+        .bind(device_id)
+        .bind(body.vehicle_id)
+        .bind(&display_name)
+        .bind(token_hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+    sqlx::query(
+        "INSERT INTO device_vehicle_assignments(device_id,vehicle_id,assigned_at)
+         VALUES($1,$2,now())",
+    )
+    .bind(device_id)
+    .bind(body.vehicle_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(db_err)?;
+    sqlx::query("DELETE FROM pending_device_auth WHERE device_id=$1")
+        .bind(device_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+    tx.commit().await.map_err(db_err)?;
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "timestamp": Utc::now(),
+            "level": "info",
+            "event": "pending_device_approved",
+            "deviceId": device_id,
+            "vehicleId": body.vehicle_id,
+            "username": auth.username,
+        })
+    );
+    Ok(Json(ApprovedDeviceView {
+        device_id,
+        vehicle_id: body.vehicle_id,
+        display_name,
+    }))
+}
+
+async fn confirm_dashboard_password(db: &PgPool, username: &str, password: String) -> Result<()> {
+    if password.is_empty() || password.len() > 1024 {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "invalid_credentials",
+            "invalid password",
+        ));
+    }
+    let encoded: String = sqlx::query_scalar(
+        "SELECT password_hash FROM dashboard_users WHERE username=$1 AND disabled_at IS NULL",
+    )
+    .bind(username)
+    .fetch_optional(db)
+    .await
+    .map_err(db_err)?
+    .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "unauthorized", "login required"))?;
+    let valid = tokio::task::spawn_blocking(move || verify_password(&password, &encoded))
+        .await
+        .map_err(|_| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "password verification failed",
+            )
+        })?;
+    if !valid {
+        return Err(err(
+            StatusCode::FORBIDDEN,
+            "invalid_credentials",
+            "invalid password",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RotateDeviceTokenBody {
@@ -897,11 +1193,7 @@ async fn rotate_device_token(
 ) -> Result<Response> {
     let auth = dashboard(&s.db, &headers).await?;
     if let Some(token) = &body.device_token {
-        if !(16..=128).contains(&token.len())
-            || !token
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
-        {
+        if !valid_device_token(token) {
             return Err(err(
                 StatusCode::BAD_REQUEST,
                 "invalid_device_token",
@@ -909,38 +1201,7 @@ async fn rotate_device_token(
             ));
         }
     }
-    if body.password.is_empty() || body.password.len() > 1024 {
-        return Err(err(
-            StatusCode::FORBIDDEN,
-            "invalid_credentials",
-            "invalid password",
-        ));
-    }
-    let encoded: String = sqlx::query_scalar(
-        "SELECT password_hash FROM dashboard_users WHERE username=$1 AND disabled_at IS NULL",
-    )
-    .bind(auth.username)
-    .fetch_optional(&s.db)
-    .await
-    .map_err(db_err)?
-    .ok_or_else(|| err(StatusCode::UNAUTHORIZED, "unauthorized", "login required"))?;
-    let password_ok =
-        tokio::task::spawn_blocking(move || verify_password(&body.password, &encoded))
-            .await
-            .map_err(|_| {
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    "password verification failed",
-                )
-            })?;
-    if !password_ok {
-        return Err(err(
-            StatusCode::FORBIDDEN,
-            "invalid_credentials",
-            "invalid password",
-        ));
-    }
+    confirm_dashboard_password(&s.db, &auth.username, body.password).await?;
     let mut tx = s.db.begin().await.map_err(db_err)?;
     let device = sqlx::query(
         "SELECT vehicle_id, token_hash FROM devices WHERE id=$1 AND token_revoked_at IS NULL FOR UPDATE",
@@ -970,6 +1231,11 @@ async fn rotate_device_token(
     sqlx::query("UPDATE devices SET token_hash=$2 WHERE id=$1")
         .bind(device_id)
         .bind(new_hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_err)?;
+    sqlx::query("DELETE FROM pending_device_auth WHERE device_id=$1")
+        .bind(device_id)
         .execute(&mut *tx)
         .await
         .map_err(db_err)?;
@@ -1307,6 +1573,11 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/auth/session", get(auth_session))
         .route("/api/v1/auth/logout", post(logout))
         .route("/api/v1/devices", get(devices))
+        .route("/api/v1/devices/pending", get(pending_devices))
+        .route(
+            "/api/v1/devices/pending/:device_id/approve",
+            post(approve_pending_device),
+        )
         .route(
             "/api/v1/devices/:device_id/rotate-token",
             post(rotate_device_token),

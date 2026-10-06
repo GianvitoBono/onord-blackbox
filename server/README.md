@@ -21,6 +21,7 @@ For the isolated `compose.local.yaml` stack, `DASHBOARD_LOCAL_HTTP_CONTAINER=tru
 
 `/healthz` is process liveness; `/readyz` returns 503 until PostgreSQL responds. Put server-generated device token hashes in `devices.token_hash`: SHA-256 of the exact raw bearer token bytes. Plaintext tokens are kept in the private credentials JSON for bootstrap and never stored in the database or logged. Create a matching open row in `device_vehicle_assignments` for each assigned device.
 Backend writes JSON request and database-error logs to stderr, visible through `docker compose logs backend`. Ingest 401 logs include `deviceId`, `batchId`, and a reason (`missing_bearer`, `unknown_device_id`, `device_revoked`, `token_mismatch`); they never include the token or Authorization header.
+Failed authenticated requests with a bearer token are retained for seven days in `pending_device_auth`, capped at 200 device IDs. The table stores a SHA-256 token hash and metadata, never the bearer token. The dashboard can approve an unknown device using its most recently observed token hash after password confirmation and vehicle selection. Registered devices with token mismatch require explicit token rotation.
 
 ## API contract (schema version 1)
 
@@ -85,6 +86,8 @@ Dashboard login endpoints:
 - `GET /api/v1/auth/session` returns current username or HTTP 401.
 - `POST /api/v1/auth/logout` revokes session and clears cookie.
 - `GET /api/v1/devices` lists devices without exposing token hashes.
+- `GET /api/v1/devices/pending` lists recent failed device IDs, reasons, timestamps, and attempt counts. Only `unknown_device_id` entries with a valid 16–128 character token are `approvable`.
+- `POST /api/v1/devices/pending/{deviceId}/approve` with `{ "password": "...", "vehicleId": "...", "displayName": "..." }` creates the device, assigns it to the selected vehicle, and trusts the hash from the last rejected request.
 - `POST /api/v1/devices/{deviceId}/rotate-token` with `{ "password": "...", "deviceToken": "optional-custom-token" }` rechecks the dashboard password, replaces the active device token, and returns `{ "deviceId": "...", "deviceToken": "...", "credentialsFileUpdated": true }` once. Omit `deviceToken` for a generated value. The previous token is invalid immediately.
 
 Dashboard reads require the session cookie and return arrays directly. Device bearer tokens never authenticate dashboard reads.

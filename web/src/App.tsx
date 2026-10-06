@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
-import { ApiError, fetchDevices, fetchSession, fetchTripGps, fetchTripMetricCatalog, fetchTripMetricSamples, fetchTrips, fetchVehicles, GpsSample, login, logout, ManagedDevice, MetricDefinition, MetricSample, rotateDeviceToken, Trip, Vehicle } from './api'
+import { ApiError, approvePendingDevice, fetchDevices, fetchPendingDevices, fetchSession, fetchTripGps, fetchTripMetricCatalog, fetchTripMetricSamples, fetchTrips, fetchVehicles, GpsSample, login, logout, ManagedDevice, MetricDefinition, MetricSample, PendingDevice, rotateDeviceToken, Trip, Vehicle } from './api'
 
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 const shortDateFormat = new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' })
@@ -91,6 +91,13 @@ export default function App() {
   const [authError, setAuthError] = useState('')
   const [vehicles, setVehicles] = useState<Vehicle[]>([])
   const [devices, setDevices] = useState<ManagedDevice[]>([])
+  const [pendingDevices, setPendingDevices] = useState<PendingDevice[]>([])
+  const [approvalPasswords, setApprovalPasswords] = useState<Record<string, string>>({})
+  const [approvalVehicleIds, setApprovalVehicleIds] = useState<Record<string, string>>({})
+  const [approvalNames, setApprovalNames] = useState<Record<string, string>>({})
+  const [approvingDeviceId, setApprovingDeviceId] = useState('')
+  const [pendingError, setPendingError] = useState('')
+  const [pendingNotice, setPendingNotice] = useState('')
   const [rotationPasswords, setRotationPasswords] = useState<Record<string, string>>({})
   const [rotationModes, setRotationModes] = useState<Record<string, 'generated' | 'custom'>>({})
   const [customTokens, setCustomTokens] = useState<Record<string, string>>({})
@@ -123,10 +130,16 @@ export default function App() {
     setSignedInUsername('')
     setVehicles([])
     setDevices([])
+    setPendingDevices([])
+    setApprovalPasswords({})
+    setApprovalVehicleIds({})
+    setApprovalNames({})
+    setApprovingDeviceId('')
+    setPendingError('')
+    setPendingNotice('')
     setRotationPasswords({})
     setRotationModes({})
     setCustomTokens({})
-    setRotationPasswords({})
     setRotatingDeviceId('')
     setNewDeviceToken(null)
     setRotationError('')
@@ -149,8 +162,12 @@ export default function App() {
     try {
       const vehicleRows = await fetchVehicles(controller.signal)
       const deviceRows = await fetchDevices(controller.signal)
+      const pendingRows = await fetchPendingDevices(controller.signal)
       setVehicles(vehicleRows)
       setDevices(deviceRows)
+      setPendingDevices(pendingRows)
+      setApprovalVehicleIds((current) => Object.fromEntries(pendingRows.map((row) => [row.deviceId, current[row.deviceId] || row.vehicleId || vehicleRows[0]?.id || ''])))
+      setApprovalNames((current) => Object.fromEntries(pendingRows.map((row) => [row.deviceId, current[row.deviceId] || row.displayName || ''])))
       const nextId = vehicleId && vehicleRows.some((vehicle) => vehicle.id === vehicleId) ? vehicleId : vehicleRows[0]?.id || ''
       setSelectedId(nextId)
       if (!nextId) {
@@ -279,8 +296,34 @@ export default function App() {
     endSession()
   }
 
+  async function refreshPending() {
+    setPendingError(''); setPendingNotice('')
+    setApprovalPasswords({})
+    try { setPendingDevices(await fetchPendingDevices()) }
+    catch (failure) { if (failure instanceof ApiError && failure.status === 401) { endSession(); return }; setPendingError(errorMessage(failure)) }
+  }
+
+  async function approvePending(row: PendingDevice) {
+    const password = approvalPasswords[row.deviceId] || ''
+    const vehicleId = approvalVehicleIds[row.deviceId] || ''
+    const displayName = approvalNames[row.deviceId]?.trim() || ''
+    if (!row.approvable) { setPendingError('This request cannot be approved. Check its reason and token format.'); return }
+    if (!password || !vehicleId || !displayName) { setPendingError('Choose a vehicle, enter a device name and confirm your account password.'); return }
+    setApprovalPasswords((current) => ({ ...current, [row.deviceId]: '' }))
+    setApprovingDeviceId(row.deviceId); setPendingError(''); setPendingNotice('')
+    try {
+      await approvePendingDevice(row.deviceId, password, vehicleId, displayName)
+      setPendingNotice(`${displayName} approved. Its observed token hash is now trusted.`)
+      await load(selectedId)
+    } catch (failure) {
+      if (failure instanceof ApiError && failure.status === 401) { endSession(); return }
+      setPendingError(failure instanceof ApiError && failure.status === 403 ? 'Incorrect account password.' : failure instanceof ApiError && failure.status === 409 ? 'This failure is no longer eligible for approval. For token mismatch, use the existing device rotation form.' : errorMessage(failure))
+    } finally { setApprovingDeviceId('') }
+  }
+
   function chooseVehicle(id: string) {
     setRotationPasswords({}); setRotationModes({}); setCustomTokens({}); setNewDeviceToken(null); setRotationError(''); setRotationErrorDeviceId(''); setRotationNotice(''); setCopyNotice('')
+    setApprovalPasswords({})
     setSelectedId(id)
     if (signedInUsername) void load(id)
   }
@@ -314,7 +357,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    const clearSecrets = () => { setRotationPasswords({}); setCustomTokens({}); setRotationModes({}); setNewDeviceToken(null); setRotationError(''); setRotationErrorDeviceId(''); setRotationNotice(''); setCopyNotice('') }
+    const clearSecrets = () => { setRotationPasswords({}); setCustomTokens({}); setRotationModes({}); setApprovalPasswords({}); setNewDeviceToken(null); setRotationError(''); setRotationErrorDeviceId(''); setRotationNotice(''); setCopyNotice('') }
     window.addEventListener('hashchange', clearSecrets)
     window.addEventListener('pagehide', clearSecrets)
     return () => { window.removeEventListener('hashchange', clearSecrets); window.removeEventListener('pagehide', clearSecrets) }
@@ -404,6 +447,22 @@ export default function App() {
                 </form>
                 {rotationError && rotationErrorDeviceId === device.id && <p className="rotation-error" role="alert">{rotationError}</p>}
                 {newDeviceToken?.deviceId === device.id && <div className="new-token-panel" role="status"><strong>New device token</strong><p>{rotationNotice}</p><div className="token-copy-row"><input aria-label="New device token" readOnly value={newDeviceToken.deviceToken} onFocus={(event) => event.currentTarget.select()} /><button type="button" onClick={() => void copyNewToken()}>{copyNotice || 'Copy token'}</button></div></div>}
+              </article>)}</div>}
+            </section>
+
+            <section className="pending-section">
+              <div className="section-heading"><div><p className="eyebrow">Connection review</p><h2>Failed device connections</h2></div><div className="pending-heading-actions"><span className="count-pill">{pendingDevices.length} pending</span><button className="refresh-button" type="button" onClick={() => void refreshPending()}>Refresh</button></div></div>
+              {pendingError && <p className="pending-error" role="alert">{pendingError}</p>}
+              {pendingNotice && <p className="pending-notice" role="status">{pendingNotice}</p>}
+              {pendingDevices.length === 0 ? <div className="device-list-empty">No failed device connections recorded.</div> : <div className="pending-list">{pendingDevices.map((row) => <article className="pending-device" key={row.deviceId}>
+                <div className="pending-summary"><div><span className="eyebrow">{row.reason.replaceAll('_', ' ')}</span><strong>{row.displayName || 'Unrecognized device'}</strong><small>Last seen {formatDate(row.lastSeenAt)} · {row.attemptCount} attempts</small></div><button type="button" className="copy-id-button" onClick={() => void navigator.clipboard.writeText(row.deviceId)}>Copy ID</button></div>
+                <code className="pending-device-id">{row.deviceId}</code><small className="pending-batch">Last batch: {row.lastBatchId || '—'} · First seen {formatDate(row.firstSeenAt)}</small>
+                {row.approvable ? <div className="pending-approval">
+                  <label htmlFor={`approve-vehicle-${row.deviceId}`}>Assign vehicle</label><select id={`approve-vehicle-${row.deviceId}`} value={approvalVehicleIds[row.deviceId] || ''} onChange={(event) => setApprovalVehicleIds((current) => ({ ...current, [row.deviceId]: event.target.value }))}><option value="">Choose a vehicle</option>{vehicles.map((vehicle) => <option value={vehicle.id} key={vehicle.id}>{vehicle.displayName}</option>)}</select>
+                  <label htmlFor={`approve-name-${row.deviceId}`}>Device display name</label><input id={`approve-name-${row.deviceId}`} value={approvalNames[row.deviceId] || ''} onChange={(event) => setApprovalNames((current) => ({ ...current, [row.deviceId]: event.target.value }))} placeholder="e.g. Opnord in Fiat Panda" />
+                  <label htmlFor={`approve-password-${row.deviceId}`}>Account password</label><input id={`approve-password-${row.deviceId}`} type="password" autoComplete="current-password" value={approvalPasswords[row.deviceId] || ''} onChange={(event) => setApprovalPasswords((current) => ({ ...current, [row.deviceId]: event.target.value }))} placeholder="Confirm your password" />
+                  <p>Verify this device ID against the phone before approval. Approval trusts the token hash from its last rejected request; the token stays on the phone and is never shown here.</p><button type="button" className="rotate-button" disabled={approvingDeviceId === row.deviceId || vehicles.length === 0} onClick={() => void approvePending(row)}>{approvingDeviceId === row.deviceId ? 'Approving…' : 'Approve device'}</button>
+                </div> : <p className="pending-guidance">{row.reason === 'unknown_device_id' ? 'Token from the last rejected request is too short or has unsupported characters. Set a 16–128 character token on the phone, then retry sync.' : row.reason === 'token_mismatch' ? 'This registered device has a token mismatch. Use the existing device rotation form above to issue a token and update the phone.' : 'This device was revoked and cannot be approved from this list.'}</p>}
               </article>)}</div>}
             </section>
 

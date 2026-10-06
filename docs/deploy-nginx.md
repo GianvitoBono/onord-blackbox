@@ -42,6 +42,8 @@ docker compose --env-file .env.nginx -f compose.nginx.yaml logs -f --tail=100 ba
 
 I log JSON `ingest_auth_failed` riportano `deviceId`, `batchId` e motivo: `missing_bearer`, `unknown_device_id`, `device_revoked` o `token_mismatch`. Non riportano token né header Authorization. Se `unknown_device_id` continua dopo la modifica dell'ID nell'app, aggiornare anche l'app Android: le versioni precedenti mantenevano il vecchio ID nei batch in coda.
 
+La dashboard mostra gli ID rifiutati negli ultimi sette giorni in **Failed device connections**. Per `unknown_device_id`, confrontare l'ID con quello nell'app Nord, scegliere il veicolo, dare un nome al dispositivo e confermare con la password dashboard. L'approvazione registra l'hash del token visto nell'ultima richiesta rifiutata: non occorre copiarlo sul server. Non approvare ID sconosciuti. `token_mismatch` indica un dispositivo già registrato e richiede la rotazione manuale del token. La lista conserva al massimo 200 ID recenti e non memorizza token in chiaro.
+
 ## Blocco Nginx
 
 Dentro il `server { listen 443 ssl; server_name blackbox.example.com; ... }` già esistente, aggiungere [nginx-location.conf](../deploy/nginx-location.conf). Se il sito contiene altri `location`, usare un sottodominio dedicato: questa regola inoltra l'intero sito, mantenendo stesso origin per dashboard e API.

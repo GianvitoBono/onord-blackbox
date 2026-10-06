@@ -45,6 +45,8 @@ Per ruotare il token dispositivo: aprire dashboard → **Blackbox devices**, sce
 
 Per vedere perché l'ingest restituisce 401: `docker compose --env-file .env.server -f compose.server.yaml logs -f --tail=100 backend`. I record JSON `ingest_auth_failed` distinguono `missing_bearer`, `unknown_device_id`, `device_revoked` e `token_mismatch`, senza riportare il token.
 
+La sezione **Failed device connections** della dashboard conserva fino a 200 ID rifiutati negli ultimi sette giorni. Un ID `unknown_device_id` può essere approvato dopo verifica sull'app Nord, scelta del veicolo e conferma della password dashboard. Viene autorizzato l'hash del token dell'ultima richiesta rifiutata, senza conservarne il valore in chiaro. Un `token_mismatch` su dispositivo registrato richiede invece rotazione manuale del token.
+
 Dashboard: `https://<DOMAIN>/`. Nell'app Android: backend URL `https://<DOMAIN>`, `deviceId` e `deviceToken` dal JSON. Le credenziali dashboard non vanno nell'app Android. Per ruotare password dashboard, eseguire `provision_dashboard --reset`; sessioni esistenti vengono revocate.
 
 ## Dati e aggiornamenti

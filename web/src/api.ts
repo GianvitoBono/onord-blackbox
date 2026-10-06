@@ -29,6 +29,7 @@ export type DeviceStatus = {
 }
 
 export type ManagedDevice = { id: string; vehicleId: string; displayName: string; tokenRevokedAt?: string | null }
+export type PendingDevice = { deviceId: string; reason: string; firstSeenAt: string; lastSeenAt: string; attemptCount: number; lastBatchId: string; vehicleId?: string; displayName?: string; approvable: boolean }
 export type RotatedDeviceToken = { deviceId: string; deviceToken: string; credentialsFileUpdated?: boolean }
 
 export type GpsSample = {
@@ -136,6 +137,14 @@ export async function fetchVehicles(signal?: AbortSignal) {
 
 export async function fetchDevices(signal?: AbortSignal): Promise<ManagedDevice[]> {
   return unwrapList<ManagedDevice>(await request<unknown>('/api/v1/devices', { signal }))
+}
+
+export async function fetchPendingDevices(signal?: AbortSignal): Promise<PendingDevice[]> {
+  return unwrapList<PendingDevice>(await request<unknown>('/api/v1/devices/pending', { signal }))
+}
+
+export async function approvePendingDevice(deviceId: string, password: string, vehicleId: string, displayName: string) {
+  return request<{ deviceId: string; vehicleId: string; displayName: string }>(`/api/v1/devices/pending/${encodeURIComponent(deviceId)}/approve`, { method: 'POST', body: JSON.stringify({ password, vehicleId, displayName }) })
 }
 
 export async function rotateDeviceToken(deviceId: string, password: string, deviceToken?: string): Promise<RotatedDeviceToken> {
