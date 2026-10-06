@@ -4,6 +4,8 @@ Car Scanner mostra molti parametri perché combina PID standard, profili specifi
 
 ## Acquisizione
 
+Sul Nord con app **0.1.9**: da fermo, accendere quadro/motore e adattatore OBD, aprire l'app, premere **Acquisisci risposte OBD grezze**, attendere “completata”, poi **Copia risposte OBD grezze** e condividere il JSON. Il report contiene richiesta `01xx`, timestamp, header ECU, testo originale ELM e `complete_by_ecu` solo quando i frame ISO-TP formano un payload completo. `unverified_or_incomplete` richiede nuova acquisizione o verifica dell'adattatore; non dedurre formule da un intero raw. Questa acquisizione è locale e non richiede backend.
+
 1. Interrogare le bitmap Mode 01 (`0100`, `0120`, `0140`, `0160` e successive quando il bit di continuazione è presente). Registrare PID supportati, errori, tempi di risposta e identificazione dell'adattatore. Non supporre che ogni PID standard sia implementato dalla ECU.
 2. Decodificare e conservare ogni parametro numerico standard implementato nel catalogo: motore, aria/aspirazione, carburante, emissioni, temperature, tensioni, coppia, distanze e contatori. Campioni indipendenti con timestamp di lettura, unità canonica e codice PID. Supportare valori sparsi.
 3. Interrogare i PID a priorità: velocità, RPM, carico, MAP e coppia più spesso; temperature, carburante, contatori e diagnostica meno spesso. Un ELM327 seriale serve una richiesta per volta. Esporre frequenze e timeout effettivi nella diagnostica; non promettere 1 Hz per ogni voce quando il catalogo cresce.

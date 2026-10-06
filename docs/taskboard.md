@@ -48,6 +48,8 @@ Stato al 2026-10-06. Le caselle indicano lavoro completato nel repository, non u
 - [x] Persistenza locale letture PID con ID e timestamp; payload compatibile con contratto P1. Migrazione Room v3 e schema generato.
 - [x] Catalogo Mode 01 ampliato, Room v4 con PID dinamici, scheduler prioritario e stime MAP−BARO/coppia; frontend mostra catalogo effettivamente raccolto.
 - [x] App 0.1.8: decodifica `0134` in rapporto aria/carburante e corrente, e `018E` in percentuale attriti; nuove serie distinte dallo storico raw. APK compilato e installato sul Nord via ADB.
+- [x] App 0.1.9: acquisizione manuale Mode 01 dei PID diesel osservati, con header ECU, risposta ELM integrale, timestamp e payload ISO-TP ricomposto quando completo; JSON copiabile dalla schermata Android.
+- [ ] Validare su Giulietta accesa le risposte Mode 01 acquisite. Se l'ELM327 interrompe ancora i frame ISO-TP, confrontare con adattatore affidabile prima di assegnare formule a DPF/EGR/NOx.
 - [ ] Profilo Alfa/Fiat specifico per Giulietta: identificare e verificare ID/formule da acquisizione reale, incluse metriche DPF e turbo richiesto/effettivo.
 - [ ] Prove auto con dongle reale e misure di latenza/temperatura.
 

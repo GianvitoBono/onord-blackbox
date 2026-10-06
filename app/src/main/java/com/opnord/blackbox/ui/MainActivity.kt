@@ -87,6 +87,8 @@ class MainActivity : ComponentActivity() {
         content.addView(Button(this).apply { text = "Copia risultato scansione"; setOnClickListener { copyDiagnosticReport() } })
         content.addView(Button(this).apply { text = "Identifica centralina motore"; setOnClickListener { identifyEcu() } })
         content.addView(Button(this).apply { text = "Copia identificazione ECU"; setOnClickListener { copyEcuIdentity() } })
+        content.addView(Button(this).apply { text = "Acquisisci risposte OBD grezze"; setOnClickListener { captureMode01() } })
+        content.addView(Button(this).apply { text = "Copia risposte OBD grezze"; setOnClickListener { copyMode01Capture() } })
         content.addView(Button(this).apply { text = "Salva configurazione e sincronizza"; setOnClickListener { saveSyncConfiguration() } })
         content.addView(Button(this).apply { text = "Sincronizza ora"; setOnClickListener { TelemetrySyncWorker.retryNow(this@MainActivity); refresh() } })
         content.addView(Button(this).apply { text = "Configura permessi posizione"; setOnClickListener { requestLocationPermissions() } })
@@ -156,6 +158,8 @@ class MainActivity : ComponentActivity() {
         val ecuSummary = diagnostics.getString("ecu_identity_summary", null)
         val ecuAt = diagnostics.getLong("ecu_identity_at", 0L)
         val ecuSyncStatus = diagnostics.getString("ecu_sync_status", null)
+        val captureStatus = diagnostics.getString("mode01_capture_status", null)
+        val captureAt = diagnostics.getLong("mode01_capture_at", 0L)
         info.text = "Permesso posizione: ${if (hasBackgroundLocation()) "sempre" else "mancante"}\n" +
             "Viaggi salvati: $tripCount\nCampioni locali: $sampleCount\nIn attesa di sincronizzazione: $pendingCount\n\n" +
             "GPS: $gpsStatus${if (lastGps > 0) " · ultimo punto ${DateFormat.format("dd/MM HH:mm:ss", lastGps)}" else ""}\n" +
@@ -168,6 +172,7 @@ class MainActivity : ComponentActivity() {
             (if (ecuStatus != null) "Identificazione ECU: $ecuStatus${if (ecuAt > 0) " · ${DateFormat.format("dd/MM HH:mm", ecuAt)}" else ""}\n" else "") +
             (if (ecuSummary != null) "$ecuSummary\n" else "") +
             (if (ecuSyncStatus != null) "Invio ECU: $ecuSyncStatus\n" else "") +
+            (if (captureStatus != null) "Risposte OBD grezze: $captureStatus${if (captureAt > 0) " · ${DateFormat.format("dd/MM HH:mm", captureAt)}" else ""}\n" else "") +
             "Sincronizzazione: $syncStatus\n" +
             "Ultimo tentativo: ${if (lastAttempt > 0) DateFormat.format("dd/MM HH:mm", lastAttempt) else "mai"}\n" +
             "Ultimo successo: ${if (lastSuccess > 0) DateFormat.format("dd/MM HH:mm", lastSuccess) else "mai"}\n\n" +
@@ -264,6 +269,30 @@ class MainActivity : ComponentActivity() {
         val report = summary + "\n\n" + prefs.getString("ecu_identity_report", "").orEmpty()
         getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Identificazione ECU", report))
         info.text = "Identificazione ECU copiata. Incollala per verificare centralina e PID Alfa/Fiat."
+    }
+
+    private fun captureMode01() {
+        val address = getSharedPreferences("obd_configuration", MODE_PRIVATE).getString("address", "").orEmpty()
+        if (address.isBlank()) {
+            info.text = "Scegli e salva prima l'adattatore OBD Bluetooth."
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 31 && ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            bluetoothPermission.launch(Manifest.permission.BLUETOOTH_CONNECT)
+            return
+        }
+        ContextCompat.startForegroundService(this, Intent(this, BlackBoxService::class.java).setAction(BlackBoxService.ACTION_CAPTURE_MODE01))
+        getSharedPreferences("diagnostics", MODE_PRIVATE).edit().putString("mode01_capture_status", "acquisizione in corso").apply()
+    }
+
+    private fun copyMode01Capture() {
+        val report = getSharedPreferences("diagnostics", MODE_PRIVATE).getString("mode01_capture_report", null)
+        if (report.isNullOrBlank()) {
+            info.text = "Nessuna acquisizione completa. Esegui prima la scansione delle risposte grezze."
+            return
+        }
+        getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Risposte OBD Mode 01", report))
+        info.text = "Risposte OBD copiate. Incolla il JSON per analizzare PID e byte di ogni ECU."
     }
 
     private fun selectObdDevice() {
