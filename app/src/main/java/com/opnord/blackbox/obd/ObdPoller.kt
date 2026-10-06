@@ -1,0 +1,104 @@
+package com.opnord.blackbox.obd
+
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+
+data class ObdReading(val observedAt: Long, val values: Map<ObdPid, Double>, val errors: List<ObdResult>, val derived: Map<String, Double> = emptyMap())
+
+/** Serial, bounded discovery/poll loop. Errors are reported and never terminate the caller's logger. */
+class ObdPoller(
+    private val transport: ObdTransport,
+    private val intervalMs: Long = 1_000,
+    private val commandTimeoutMs: Long = 2_500,
+    private val onReading: suspend (ObdReading) -> Unit,
+    private val onStatus: (String) -> Unit = {}
+) {
+    suspend fun run() {
+        var retry = 0
+        try {
+        while (true) {
+            try {
+                onStatus("connecting")
+                withTimeout(10_000) { transport.connect() }
+                retry = 0
+                val supported = discover()
+                // Frequent driving signals first; slower/less useful values rotate in bounded batches.
+                val priority = listOf(ObdPid.RPM, ObdPid.SPEED, ObdPid.ENGINE_LOAD, ObdPid.THROTTLE,
+                    ObdPid.MAP, ObdPid.BAROMETRIC_PRESSURE, ObdPid.DEMANDED_TORQUE, ObdPid.ACTUAL_TORQUE)
+                val requested = priority.filter { it in supported } + ObdPid.entries.filter { it in supported && it !in priority }
+                val missing = ObdPid.entries.filterNot { it in supported }.joinToString(",") { it.label }
+                onStatus(if (requested.isEmpty()) "connected_no_supported_pids; unsupported=$missing" else "connected; unsupported=$missing")
+                var cursor = 0
+                val latest = mutableMapOf<ObdPid, Pair<Long, Double>>()
+                while (true) {
+                    val values = mutableMapOf<ObdPid, Double>()
+                    val errors = mutableListOf<ObdResult>()
+                    // Keep each sample responsive even when ECU advertises dozens of PIDs.
+                    val batch = if (requested.size <= 8) requested else {
+                        val rotating = requested.filterNot { it in priority }
+                        val extras = if (rotating.isEmpty()) emptyList() else
+                            (0 until minOf(4, rotating.size)).map { rotating[(cursor + it) % rotating.size] }
+                        (requested.filter { it in priority } + extras).distinct()
+                    }
+                    batch.forEach { pid ->
+                        try {
+                            when (val result = Elm327Parser.parse(withTimeout(commandTimeoutMs) { transport.exchange("01%02X".format(pid.code), commandTimeoutMs) }, pid)) {
+                                is ObdResult.Value -> values[pid] = result.value
+                                else -> errors += result
+                            }
+                        } catch (e: CancellationException) { throw e }
+                        catch (e: Exception) { errors += ObdResult.AdapterError(e.message ?: "command failed") }
+                        delay(75)
+                    }
+                    val rotatingCount = requested.count { it !in priority }
+                    if (rotatingCount > 0) cursor = (cursor + minOf(4, rotatingCount)) % rotatingCount
+                    val observedAt = System.currentTimeMillis()
+                    values.forEach { (pid, value) -> latest[pid] = observedAt to value }
+                    val derived = mutableMapOf<String, Double>()
+                    val map = latest[ObdPid.MAP]
+                    val baro = latest[ObdPid.BAROMETRIC_PRESSURE]
+                    if (map != null && baro != null && observedAt - map.first < 30_000 && observedAt - baro.first < 300_000 &&
+                        (ObdPid.MAP in values || ObdPid.BAROMETRIC_PRESSURE in values)) {
+                        derived["calc.manifold_gauge_pressure_kpa"] = map.second - baro.second
+                    }
+                    val actual = latest[ObdPid.ACTUAL_TORQUE]
+                    val reference = latest[ObdPid.REFERENCE_TORQUE]
+                    if (actual != null && reference != null && observedAt - actual.first < 30_000 && observedAt - reference.first < 300_000 &&
+                        (ObdPid.ACTUAL_TORQUE in values || ObdPid.REFERENCE_TORQUE in values)) {
+                        derived["calc.engine_torque_nm"] = actual.second * reference.second / 100.0
+                    }
+                    if (values.isNotEmpty() || errors.isNotEmpty()) onReading(ObdReading(observedAt, values, errors, derived))
+                    delay(intervalMs.coerceIn(250, 10_000))
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) {
+                onStatus("disconnected: ${e.message ?: "adapter error"}")
+                runCatching { transport.disconnect() }
+                delay((1_000L shl retry.coerceIn(0, 4)).coerceAtMost(15_000))
+                retry++
+            }
+        }
+        } finally {
+            withContext(NonCancellable) { runCatching { transport.disconnect() } }
+        }
+    }
+
+    private suspend fun discover(): Set<ObdPid> {
+        val discovered = mutableSetOf<ObdPid>()
+        for (start in listOf(0x00, 0x20, 0x40, 0x60)) {
+            try {
+                val response = withTimeout(commandTimeoutMs) { transport.exchange("01%02X".format(start), commandTimeoutMs) }
+                discovered += Elm327Parser.supportedPids(response, start)
+                // A clear continuation bit means later 32-PID blocks are unavailable.
+                val bytes = Elm327Parser.responseBytes(response)
+                val ix = (0 until bytes.size - 1).firstOrNull { bytes[it] == 0x41 && bytes[it + 1] == start }
+                if (ix != null && bytes.size >= ix + 6 && (bytes[ix + 5] and 1) == 0) break
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { /* One failed bitmap does not prevent trying the next standard range. */ }
+        }
+        return discovered
+    }
+}

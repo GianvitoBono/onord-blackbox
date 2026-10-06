@@ -1,0 +1,70 @@
+package com.opnord.blackbox.sync
+
+import com.opnord.blackbox.obd.ObdPid
+import com.opnord.blackbox.storage.TelemetrySampleEntity
+import com.opnord.blackbox.storage.TripEntity
+import org.json.JSONArray
+import org.json.JSONObject
+import java.time.Instant
+
+data class EncodedBatch(val payload: String, val sampleIds: List<String>)
+
+internal object BatchPayload {
+    fun encode(deviceId: String, batchId: String, trip: TripEntity, samples: List<TelemetrySampleEntity>): EncodedBatch {
+        val tripJson = JSONObject()
+            .put("id", trip.id).put("startedAt", timestamp(trip.startedAt))
+            .put("endedAt", trip.endedAt?.let(::timestamp) ?: JSONObject.NULL)
+            .put("startReason", trip.startReason).put("endReason", trip.endReason ?: JSONObject.NULL)
+            .put("distanceGpsM", JSONObject.NULL).put("distanceObdM", JSONObject.NULL)
+        val gps = JSONArray()
+        val obd = JSONArray()
+        val device = JSONArray()
+        samples.forEach { sample ->
+            if (sample.latitude != null && sample.longitude != null) {
+                gps.put(JSONObject().put("sampleId", sample.id).put("observedAt", timestamp(sample.timestamp))
+                    .put("latitude", sample.latitude).put("longitude", sample.longitude)
+                    .put("altitudeM", sample.altitude ?: JSONObject.NULL)
+                    .put("speedMps", sample.gpsSpeedMps ?: JSONObject.NULL)
+                    .put("bearingDeg", sample.bearing ?: JSONObject.NULL)
+                    .put("horizontalAccuracyM", sample.horizontalAccuracy ?: JSONObject.NULL))
+            }
+            if (sample.latitude == null || sample.batteryLevel != null || sample.batteryTemperatureC != null) {
+                device.put(JSONObject().put("sampleId", sample.id).put("observedAt", timestamp(sample.timestamp))
+                    .put("tripId", sample.tripId).put("powerConnected", sample.powerConnected)
+                    .put("batteryPct", sample.batteryLevel?.toFloat() ?: JSONObject.NULL)
+                    .put("batteryTempC", sample.batteryTemperatureC ?: JSONObject.NULL))
+            }
+            val values = runCatching { JSONObject(sample.obdValuesJson) }.getOrDefault(JSONObject())
+            // Older rows predate the generic PID snapshot; retain their original nine fields.
+            if (values.length() == 0) listOf("0C" to sample.obdRpm, "0D" to sample.obdSpeedKmh, "04" to sample.obdEngineLoadPct,
+                "11" to sample.obdThrottlePct, "05" to sample.obdCoolantC, "0F" to sample.obdIntakeTempC,
+                "10" to sample.obdMafGps, "2F" to sample.obdFuelLevelPct, "42" to sample.obdVoltageV)
+                .forEach { (pid, value) -> if (value != null) values.put(pid, value) }
+            values.keys().asSequence().toList().sorted().forEach { shortPid ->
+                val pid = if (shortPid.startsWith("calc.")) shortPid else "01$shortPid"
+                val value = values.optDouble(shortPid, Double.NaN)
+                if (value.isFinite()) {
+                    val id = java.util.UUID.nameUUIDFromBytes("${sample.id}:$pid".toByteArray(Charsets.UTF_8)).toString()
+                    val definition = shortPid.toIntOrNull(16)?.let(ObdPid::fromCode)
+                    val derivedName = when (shortPid) {
+                        "calc.manifold_gauge_pressure_kpa" -> "Estimated manifold gauge pressure (MAP − barometric)"
+                        "calc.engine_torque_nm" -> "Estimated engine torque (actual % × reference Nm)"
+                        else -> null
+                    }
+                    val derivedUnit = when (shortPid) {
+                        "calc.manifold_gauge_pressure_kpa" -> "kPa"
+                        "calc.engine_torque_nm" -> "Nm"
+                        else -> null
+                    }
+                    obd.put(JSONObject().put("sampleId", id).put("observedAt", timestamp(sample.timestamp)).put("pid", pid).put("value", value)
+                        .put("name", definition?.label ?: derivedName ?: JSONObject.NULL).put("unit", definition?.unit ?: derivedUnit ?: JSONObject.NULL))
+                }
+            }
+        }
+        val body = JSONObject().put("schemaVersion", 1).put("deviceId", deviceId).put("batchId", batchId)
+            .put("trip", tripJson).put("gpsSamples", gps).put("obdSamples", obd).put("deviceSamples", device)
+        return EncodedBatch(body.toString(), samples.map { it.id })
+    }
+
+    private fun timestamp(millis: Long) = Instant.ofEpochMilli(millis).toString()
+}

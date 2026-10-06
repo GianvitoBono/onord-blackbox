@@ -1,0 +1,17 @@
+.gradle/
+.kotlin/
+.cache/
+.data/
+.env
+.env.*
+!.env.example
+!.env.server.example
+.idea/
+node_modules/
+dist/
+target/
+__pycache__/
+*.tsbuildinfo
+**/build/
+local.properties
+.DS_Store

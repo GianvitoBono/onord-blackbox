@@ -1,0 +1,16 @@
+.git
+.cache
+.data
+.env
+.env.*
+app
+build
+.gradle
+.kotlin
+**/build
+**/target
+**/node_modules
+web/dist
+web/tsconfig.tsbuildinfo
+local.properties
+.DS_Store
