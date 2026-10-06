@@ -2,7 +2,7 @@
 
 Logger Android offline-first per OnePlus Nord originale AC2003 (Android 12, API 31), API Rust/TimescaleDB e dashboard React/TypeScript. GPS, sync Wi-Fi e lettura OBD-II standard via Bluetooth classico hanno una prima implementazione compilabile. APK debug installato e avviato sul telefono; logging GPS/OBD in auto ancora da verificare.
 
-APK debug aggiornato: [opnord-blackbox-0.1.3-debug.apk](releases/opnord-blackbox-0.1.3-debug.apk) ([SHA-256](releases/opnord-blackbox-0.1.3-debug.apk.sha256)). Aprire il file sul telefono per aggiornare l'app; la scansione diagnostica OBD è locale e non richiede un nuovo backend.
+APK debug aggiornato: [opnord-blackbox-0.1.4-debug.apk](releases/opnord-blackbox-0.1.4-debug.apk) ([SHA-256](releases/opnord-blackbox-0.1.4-debug.apk.sha256)). Aprire il file sul telefono per aggiornare l'app; scansione diagnostica e identificazione ECU sono locali e non richiedono un nuovo backend.
 
 - [Taskboard e criteri di completamento](docs/taskboard.md)
 - [Architettura Android](docs/architecture.md)
@@ -40,6 +40,8 @@ L'ID dispositivo è un UUID stabile, diverso dal nome del mezzo. Se viene cambia
 GPS e batteria vengono campionati ogni 2 s durante il viaggio. All'avvio della connessione OBD l'app legge i bitmap Mode 01 supportati e ruota tutti i PID dichiarati; quelli con formula nota hanno nome e unità, altri valori numerici semplici restano marcati `raw_unsigned_integer`. La schermata Android mostra quanti PID sono stati dichiarati, decodificati e letti. In **Esplora → Segnali del mezzo → Nome e unità** si possono correggere etichette e unità, preservate dal backend. La sola rinomina non applica formule di conversione ai valori raw. Sensori proprietari Alfa/Fiat richiedono identificazione di PID, richiesta e formula tramite acquisizione reale.
 
 Con auto ferma, adattatore associato e quadro acceso, **Scansiona errori OBD motore** nell'app legge MIL e conteggio DTC (Mode 01 PID 01), codici memorizzati/in attesa/permanenti (Mode 03/07/0A) e una fotografia di RPM, refrigerante, tensione centralina, MAP e pressione barometrica quando supportati. Mostra solo avvisi di plausibilità per refrigerante oltre 115 °C e tensione fuori 11–16 V con motore avviato; non effettua diagnosi meccanica né cancella codici. **Copia risultato scansione** prepara il report da condividere. Questi servizi standard possono non esporre errori ABS, airbag o sensori proprietari Alfa/Fiat. Riferimento protocollo: [datasheet ELM327](https://elmelectronics.com/wp-content/uploads/2020/05/ELM327DSL.pdf).
+
+**Identifica centralina motore** legge informazioni standard Mode 09: bitmap servizi, ID calibrazione, CVN e nome ECU, se disponibili. Conserva anche le risposte grezze con header ECU e protocollo dell'adattatore. **Copia identificazione ECU** prepara il report da condividere per scegliere un profilo PID esteso; non richiede Windows e non interroga ancora i PID proprietari. Non legge il VIN. Una ECU può non indicare esplicitamente la famiglia Bosch: in quel caso servono i suoi ID e i dati grezzi per la verifica.
 
 ## OBD-II sulla Giulietta 2020 1.6 JTDm2
 

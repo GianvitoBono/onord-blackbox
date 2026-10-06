@@ -90,6 +90,7 @@ class BlackBoxService : LifecycleService() {
                 ACTION_START_MONITOR -> lifecycleMutex.withLock { startMonitoring() }
                 ACTION_STOP_MONITOR -> stopMonitoring()
                 ACTION_SCAN_DIAGNOSTICS -> lifecycleMutex.withLock { scanDiagnostics() }
+                ACTION_IDENTIFY_ECU -> lifecycleMutex.withLock { identifyEcu() }
                 null -> lifecycleMutex.withLock { startMonitoring() } // START_STICKY recovery.
             }
         }
@@ -314,6 +315,38 @@ class BlackBoxService : LifecycleService() {
         }
     }
 
+    private suspend fun identifyEcu() {
+        val prefs = getSharedPreferences("diagnostics", MODE_PRIVATE)
+        prefs.edit().putString("ecu_identity_status", "lettura in corso")
+            .remove("ecu_identity_summary").remove("ecu_identity_report").apply()
+        obdJob?.cancelAndJoin()
+        obdJob = null
+        try {
+            val address = getSharedPreferences("obd_configuration", MODE_PRIVATE).getString("address", "").orEmpty()
+            require(address.isNotBlank()) { "Adattatore OBD non configurato" }
+            if (Build.VERSION.SDK_INT >= 31 && ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED)
+                throw SecurityException("Permesso Bluetooth mancante")
+            val device = BluetoothAdapter.getDefaultAdapter()?.getRemoteDevice(address)
+                ?: throw IllegalStateException("Bluetooth non disponibile")
+            val report = EcuIdentityScanner().scan(BluetoothSppObdTransport(device))
+            val useful = report.reads.any { it.status == DiagnosticStatus.SUCCESS }
+            prefs.edit().putString("ecu_identity_status", if (useful) "completata" else "nessuna identificazione disponibile")
+                .putString("ecu_identity_summary", report.summary())
+                .putString("ecu_identity_report", report.toJson())
+                .putLong("ecu_identity_at", System.currentTimeMillis()).apply()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            prefs.edit().putString("ecu_identity_status", "errore: ${error.message ?: error.javaClass.simpleName}").apply()
+        } finally {
+            when {
+                monitorStarted && tripId != null -> startObdCollection(tripId!!)
+                !monitorStarted && tripId != null -> startMonitoring()
+                !monitorStarted -> stopSelf()
+            }
+        }
+    }
+
     override fun onDestroy() {
         monitorStarted = false
         locations.stop()
@@ -327,6 +360,7 @@ class BlackBoxService : LifecycleService() {
         const val ACTION_START_MONITOR="start_monitor"
         const val ACTION_STOP_MONITOR="stop_monitor"
         const val ACTION_SCAN_DIAGNOSTICS="scan_diagnostics"
+        const val ACTION_IDENTIFY_ECU="identify_ecu"
         internal var locationCollectorFactory: (android.content.Context) -> LocationCollector = ::FusedLocationCollector
         private const val CHANNEL="blackbox"
     }
