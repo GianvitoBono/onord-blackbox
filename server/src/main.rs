@@ -1,7 +1,8 @@
 use axum::{
     body::Body,
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -23,6 +24,7 @@ use std::{
     os::unix::fs::OpenOptionsExt,
     path::PathBuf,
     sync::OnceLock,
+    time::Instant,
 };
 use uuid::Uuid;
 
@@ -156,6 +158,41 @@ async fn ready(State(s): State<App>) -> Result<&'static str> {
     })?;
     Ok("ok")
 }
+fn log_ingest_auth_failure(batch: &Batch, reason: &'static str) {
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "timestamp": Utc::now(),
+            "level": "warn",
+            "event": "ingest_auth_failed",
+            "reason": reason,
+            "deviceId": batch.device_id,
+            "batchId": batch.batch_id,
+        })
+    );
+}
+
+async fn log_request(request: Request, next: Next) -> Response {
+    let method = request.method().clone();
+    let path = request.uri().path().to_owned();
+    let started = Instant::now();
+    let response = next.run(request).await;
+    if path != "/healthz" && path != "/readyz" {
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "timestamp": Utc::now(),
+                "level": if response.status().is_server_error() { "error" } else if response.status().is_client_error() { "warn" } else { "info" },
+                "event": "http_request",
+                "method": method.as_str(),
+                "path": path,
+                "status": response.status().as_u16(),
+                "durationMs": started.elapsed().as_millis(),
+            })
+        );
+    }
+    response
+}
 async fn ingest(
     State(s): State<App>,
     headers: HeaderMap,
@@ -174,6 +211,7 @@ async fn ingest(
         .and_then(|x| x.strip_prefix("Bearer "))
         .filter(|x| !x.is_empty())
         .ok_or_else(|| {
+            log_ingest_auth_failure(&batch, "missing_bearer");
             err(
                 StatusCode::UNAUTHORIZED,
                 "unauthorized",
@@ -182,7 +220,39 @@ async fn ingest(
         })?;
     let token_hash = Sha256::digest(token.as_bytes()).to_vec();
     let mut tx = s.db.begin().await.map_err(db_err)?;
-    let device=sqlx::query("SELECT vehicle_id FROM devices WHERE id=$1 AND token_hash=$2 AND token_revoked_at IS NULL FOR SHARE").bind(batch.device_id).bind(&token_hash).fetch_optional(&mut *tx).await.map_err(db_err)?.ok_or_else(||err(StatusCode::UNAUTHORIZED,"unauthorized","invalid device token"))?;
+    let device = sqlx::query(
+        "SELECT vehicle_id, token_hash, token_revoked_at FROM devices WHERE id=$1 FOR SHARE",
+    )
+    .bind(batch.device_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(db_err)?
+    .ok_or_else(|| {
+        log_ingest_auth_failure(&batch, "unknown_device_id");
+        err(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "invalid device token",
+        )
+    })?;
+    let revoked_at: Option<DateTime<Utc>> = device.try_get("token_revoked_at").map_err(db_err)?;
+    if revoked_at.is_some() {
+        log_ingest_auth_failure(&batch, "device_revoked");
+        return Err(err(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "invalid device token",
+        ));
+    }
+    let stored_hash: Vec<u8> = device.try_get("token_hash").map_err(db_err)?;
+    if stored_hash != token_hash {
+        log_ingest_auth_failure(&batch, "token_mismatch");
+        return Err(err(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "invalid device token",
+        ));
+    }
     let vehicle_id: Uuid = device
         .try_get::<Option<Uuid>, _>("vehicle_id")
         .map_err(db_err)?
@@ -575,7 +645,16 @@ async fn insert_metric_sample(
     }
     Ok(())
 }
-fn db_err(_: sqlx::Error) -> HttpError {
+fn db_err(error: sqlx::Error) -> HttpError {
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "timestamp": Utc::now(),
+            "level": "error",
+            "event": "database_error",
+            "error": error.to_string(),
+        })
+    );
     err(
         StatusCode::INTERNAL_SERVER_ERROR,
         "internal_error",
@@ -1239,8 +1318,18 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .route("/api/v1/trips/:trip_id/metric-catalog", get(metric_catalog))
         .route("/api/v1/geo/correlations", get(geo_correlations))
         .with_state(App { db, cookie_secure })
+        .layer(middleware::from_fn(log_request))
         .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024));
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    eprintln!(
+        "{}",
+        serde_json::json!({
+            "timestamp": Utc::now(),
+            "level": "info",
+            "event": "backend_started",
+            "bindAddress": addr.to_string(),
+        })
+    );
     axum::serve(listener, app).await?;
     Ok(())
 }

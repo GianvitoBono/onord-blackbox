@@ -72,7 +72,12 @@ class TelemetrySyncWorker(context: Context, params: WorkerParameters) : Coroutin
     }
 
     private suspend fun loadOrCreateBatch(db: BlackBoxDatabase, deviceId: String): PendingSyncBatchEntity? = db.withTransaction {
-        db.pendingBatches().first()?.let { return@withTransaction it }
+        db.pendingBatches().first()?.let { pending ->
+            val queuedDeviceId = runCatching { JSONObject(pending.payload).optString("deviceId") }.getOrNull()
+            if (queuedDeviceId == deviceId) return@withTransaction pending
+            // The configured device changed while a batch was queued. Rebuild from unsynced samples.
+            db.pendingBatches().delete(pending.batchId)
+        }
         val tripId = db.samples().nextUnsyncedTripId() ?: return@withTransaction null
         val samples = db.samples().unsyncedForTrip(tripId, MAX_SAMPLES_PER_BATCH)
         val trip = db.trips().byId(tripId) ?: return@withTransaction null

@@ -34,6 +34,14 @@ docker compose --env-file .env.nginx -f compose.nginx.yaml exec -T backend cat /
 
 Il comando controlla che il token del file corrisponda a quello attivo nel database, aggiorna hash e file credenziali, mantiene `deviceId`/`vehicleId`. Token precedente smette subito di funzionare: inserire il nuovo `deviceToken` nell'app Nord. Non modificare JSON manualmente.
 
+Per diagnosticare 401 dell'app Android:
+
+```sh
+docker compose --env-file .env.nginx -f compose.nginx.yaml logs -f --tail=100 backend
+```
+
+I log JSON `ingest_auth_failed` riportano `deviceId`, `batchId` e motivo: `missing_bearer`, `unknown_device_id`, `device_revoked` o `token_mismatch`. Non riportano token né header Authorization. Se `unknown_device_id` continua dopo la modifica dell'ID nell'app, aggiornare anche l'app Android: le versioni precedenti mantenevano il vecchio ID nei batch in coda.
+
 ## Blocco Nginx
 
 Dentro il `server { listen 443 ssl; server_name blackbox.example.com; ... }` già esistente, aggiungere [nginx-location.conf](../deploy/nginx-location.conf). Se il sito contiene altri `location`, usare un sottodominio dedicato: questa regola inoltra l'intero sito, mantenendo stesso origin per dashboard e API.

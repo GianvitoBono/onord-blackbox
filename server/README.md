@@ -20,6 +20,7 @@ The dashboard also lists devices and rotates a generated or user-supplied token 
 For the isolated `compose.local.yaml` stack, `DASHBOARD_LOCAL_HTTP_CONTAINER=true` additionally allows an internal Docker bind with insecure cookies; only its Caddy port is published to host loopback. Never set this override on an internet-facing deployment.
 
 `/healthz` is process liveness; `/readyz` returns 503 until PostgreSQL responds. Put server-generated device token hashes in `devices.token_hash`: SHA-256 of the exact raw bearer token bytes. Plaintext tokens are kept in the private credentials JSON for bootstrap and never stored in the database or logged. Create a matching open row in `device_vehicle_assignments` for each assigned device.
+Backend writes JSON request and database-error logs to stderr, visible through `docker compose logs backend`. Ingest 401 logs include `deviceId`, `batchId`, and a reason (`missing_bearer`, `unknown_device_id`, `device_revoked`, `token_mismatch`); they never include the token or Authorization header.
 
 ## API contract (schema version 1)
 

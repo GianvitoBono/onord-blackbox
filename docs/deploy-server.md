@@ -43,6 +43,8 @@ docker compose --env-file .env.server -f compose.server.yaml exec -T backend cat
 
 Per ruotare il token dispositivo: aprire dashboard → **Blackbox devices**, scegliere token generato o personalizzato, confermare con la password e copiare il token mostrato una sola volta nell'app Android. Il token personalizzato richiede 16–128 caratteri ASCII fra lettere, numeri, `_` e `-`; scegliere un valore difficile da indovinare. Quello vecchio viene invalidato. La dashboard aggiorna anche il JSON delle credenziali se appartiene al dispositivo. In alternativa, usare `docker compose --env-file .env.server -f compose.server.yaml run --rm backend provision_device --rotate`, poi leggere il JSON aggiornato.
 
+Per vedere perché l'ingest restituisce 401: `docker compose --env-file .env.server -f compose.server.yaml logs -f --tail=100 backend`. I record JSON `ingest_auth_failed` distinguono `missing_bearer`, `unknown_device_id`, `device_revoked` e `token_mismatch`, senza riportare il token.
+
 Dashboard: `https://<DOMAIN>/`. Nell'app Android: backend URL `https://<DOMAIN>`, `deviceId` e `deviceToken` dal JSON. Le credenziali dashboard non vanno nell'app Android. Per ruotare password dashboard, eseguire `provision_dashboard --reset`; sessioni esistenti vengono revocate.
 
 ## Dati e aggiornamenti
