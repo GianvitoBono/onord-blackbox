@@ -1,9 +1,15 @@
-# Opnord dashboard
+# Dashboard Opnord
 
-React + TypeScript + Vite dashboard for the private vehicle telemetry API.
+Webapp React + TypeScript + Vite per consultare flotte, viaggi, GPS e telemetria OBD.
 
-## Local development
+## Sviluppo locale
 
-Run `npm install` and `npm run dev`. Vite proxies `/api` to `http://127.0.0.1:8080`, so the browser uses the same origin during local development. For deployment, route `/api` and static dashboard files through the same HTTPS origin; `VITE_API_BASE_URL` is available if a separately configured API origin is required. Sign in with username/password from `.data/dashboard-login.txt` in the repository root; API manages an HttpOnly session cookie.
+Eseguire `npm install` e `npm run dev` dalla cartella `web`. Vite inoltra `/api` a `http://127.0.0.1:8080`. In produzione servire frontend e API dallo stesso origin; `VITE_API_BASE_URL` permette un origin API separato. Accesso con username e password del file `.data/dashboard-login.txt` nella radice del progetto. La sessione usa cookie HttpOnly.
 
-The client reads `GET /api/v1/vehicles`, `GET /api/v1/vehicles/{id}/trips?limit=30`, and `GET /api/v1/trips/{id}/gps?limit=300`. Vehicle and trip fields use the backend's camelCase response shape. Device status is shown as unavailable because the current read contract does not expose a device assignment ID or status response.
+## Interfaccia
+
+Menu laterale: riepilogo, viaggi, mappa e telemetria, mezzi, amministrazione, impostazioni. Il mezzo selezionato resta salvato nel browser. La mappa carica i singoli punti GPS di un tour, consente di ispezionarli con il mouse e mostra le letture OBD temporalmente vicine. Il grafico permette ispezione, selezione e zoom temporale. I temi chiaro e scuro seguono inizialmente il sistema; la scelta nelle impostazioni resta salvata nel browser.
+
+## Mappa
+
+Predefinita: tile OpenStreetMap con attribuzione visibile. Per un provider diverso impostare `VITE_MAP_TILE_URL` e `VITE_MAP_ATTRIBUTION` durante la build. Le variabili Vite sono incorporate nel bundle: dopo una modifica serve ricostruire l'immagine web. Usare un provider con licenza e limiti adatti al traffico del proprio server.

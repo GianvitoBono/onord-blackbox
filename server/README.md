@@ -85,18 +85,21 @@ Dashboard login endpoints:
 - `POST /api/v1/auth/login` with JSON `{ "username": "admin", "password": "..." }` sets an HttpOnly session cookie and returns `{ "username": "admin" }`.
 - `GET /api/v1/auth/session` returns current username or HTTP 401.
 - `POST /api/v1/auth/logout` revokes session and clears cookie.
-- `GET /api/v1/devices` lists devices without exposing token hashes.
+- `GET /api/v1/devices` lists devices and their latest accepted ingest time without exposing token hashes.
 - `GET /api/v1/devices/pending` lists recent failed device IDs, reasons, timestamps, and attempt counts. Only `unknown_device_id` entries with a valid 16–128 character token are `approvable`.
 - `POST /api/v1/devices/pending/{deviceId}/approve` with `{ "password": "...", "vehicleId": "...", "displayName": "..." }` creates the device, assigns it to the selected vehicle, and trusts the hash from the last rejected request.
 - `POST /api/v1/devices/{deviceId}/rotate-token` with `{ "password": "...", "deviceToken": "optional-custom-token" }` rechecks the dashboard password, replaces the active device token, and returns `{ "deviceId": "...", "deviceToken": "...", "credentialsFileUpdated": true }` once. Omit `deviceToken` for a generated value. The previous token is invalid immediately.
 
 Dashboard reads require the session cookie and return arrays directly. Device bearer tokens never authenticate dashboard reads.
 
-- `GET /api/v1/vehicles` → `[{ "id": "...", "displayName": "Car", "make": null, "model": null, "modelYear": null }]`
+- `GET /api/v1/vehicles` → `[{ "id": "...", "displayName": "Car", "make": null, "model": null, "modelYear": null, "currentDeviceId": "..." }]`.
+- `POST /api/v1/vehicles` and `PUT /api/v1/vehicles/{vehicleId}` accept `{ "displayName": "Giulietta", "make": "Alfa Romeo", "model": "Giulietta", "modelYear": 2020 }` to create or update a vehicle.
+- `GET /api/v1/vehicles/{vehicleId}/status` → latest trip ID, its newest GPS point, and latest reading per metric in that trip. Each reading includes its own observation timestamp so stale values are visible.
 - `GET /api/v1/vehicles/{vehicleId}/trips?limit=100` → `[{ "id": "...", "startedAt": "...", "endedAt": "...", "startReason": "activity", "endReason": "stationary", "distanceGpsM": 1532.4, "distanceObdM": null }]`. Default limit 100, max 500.
 - `GET /api/v1/trips/{tripId}/gps?limit=5000` → `[{ "sampleId": "...", "observedAt": "...", "deltaSec": 1.0, "deltaM": 8.2, "latitude": 45.4642, "longitude": 9.19, "altitudeM": 122.0, "speedMps": 8.2, "bearingDeg": 90.0, "horizontalAccuracyM": 5.0 }]`. Default 5000, max 10000, oldest first. First point has null deltas. Ordering uses `(observedAt, sampleId)`; `deltaM` is PostGIS ground distance from preceding point, not road/map-matched distance.
 - `GET /api/v1/trips/{tripId}/metrics?name=obd.pid.010c&from=2026-10-05T12%3A00%3A00Z&to=2026-10-05T13%3A00%3A00Z&limit=1000` → bounded numeric samples with `sampleId`, `observedAt`, `name`, `unit`, `value`. Max limit 5000.
 - `GET /api/v1/trips/{tripId}/metric-catalog` → metrics present in that trip as `[{ "name": "obd.pid.010c", "unit": "rpm", "description": "Engine RPM" }]`.
+- `GET /api/v1/trips/{tripId}/telemetry-at?at={rfc3339}&toleranceMs=2000` → nearest reading per metric inside the requested time window, with `sampleId`, `observedAt`, `name`, `unit`, `value`. Max tolerance 30 s and max 1000 metrics. Used by the GPS point inspector.
 - `GET /api/v1/geo/correlations?vehicleId={uuid}&name=obd.pid.010c&from={rfc3339}&to={rfc3339}&longitude=9.19&latitude=45.46&radiusM=500&toleranceMs=2000&limit=500` → GPS fixes in radius with nearest metric sample inside explicit time tolerance. Max radius 10 km, tolerance 30 s, limit 1000. Coordinates use WGS84 and radius uses meters.
 
-The read API has no pagination cursor or vehicle mutation endpoints yet. The metrics and geospatial endpoints require time bounds and cap returned rows; large historical queries still need cursor/downsample APIs.
+The read API has no pagination cursor yet. The metrics and geospatial endpoints require time bounds and cap returned rows; large historical queries still need cursor/downsample APIs.

@@ -1,0 +1,119 @@
+import type { Dispatch, SetStateAction } from 'react'
+import type { GpsSample, MetricDefinition, MetricSample, Trip } from '../api'
+import TripMap from '../components/TripMap'
+import TelemetryChart from '../components/TelemetryChart'
+import { formatDate, formatDistance, metricLabel, nearestGps, type NearbyReading } from './format'
+
+type Props = { trips: Trip[]; tripId: string; setTripId: Dispatch<SetStateAction<string>>; selectedTrip?: Trip; detailError: string; gps: GpsSample[]; displayPoint: GpsSample | null; setHoverPoint: Dispatch<SetStateAction<GpsSample | null>>; setSelectedPoint: Dispatch<SetStateAction<GpsSample | null>>; nearby: NearbyReading[]; nearbyLoading: boolean; catalog: MetricDefinition[]; metricName: string; setMetricName: Dispatch<SetStateAction<string>>; metrics: MetricSample[]; selectedMetric?: MetricDefinition }
+
+export default function Explore({ trips, tripId, setTripId, selectedTrip, detailError, gps, displayPoint, setHoverPoint, setSelectedPoint, nearby, nearbyLoading, catalog, metricName, setMetricName, metrics, selectedMetric }: Props) {
+  return (
+    <>
+<div className="page-heading explore-heading">
+<div>
+<span className="eyebrow">ANALISI PERCORSO</span>
+<h1>Esplora</h1>
+<p>Mappa e segnali sincronizzati. Passa sui punti per vedere i dati.</p>
+</div>
+<select className="trip-selector" aria-label="Seleziona viaggio" value={tripId} onChange={e => setTripId(e.target.value)}>
+{trips.length === 0 && <option value="">Nessun viaggio</option>}{trips.map(t => <option key={t.id} value={t.id}>
+{formatDate(t.startedAt)} · {formatDistance(t.distanceGpsM ?? t.distanceObdM)}
+</option>)}
+</select>
+</div>
+{detailError && <div className="banner error">
+{detailError}
+</div>}
+<div className="explore-layout">
+<div className="map-column">
+<div className="map-heading">
+<div>
+<span className="eyebrow">TRACCIA GPS</span>
+<h2>
+{selectedTrip ? formatDate(selectedTrip.startedAt) : 'Seleziona un viaggio'}
+</h2>
+</div>
+<span>
+{gps.length === 5000 ? 'Primi 5.000 punti mostrati' : `${gps.length} punti`}
+</span>
+</div>
+<div className="large-map">
+<TripMap samples={gps} selectedSampleId={displayPoint?.sampleId} onPointHover={setHoverPoint} onPointSelect={setSelectedPoint} />
+</div>
+</div>
+<aside className="point-inspector">
+<span className="eyebrow">PUNTO SELEZIONATO</span>
+{displayPoint ? <>
+<h2>
+{formatDate(displayPoint.observedAt)}
+</h2>
+<div className="inspector-coordinates">
+{Math.abs(displayPoint.latitude).toFixed(6)}° {displayPoint.latitude >= 0 ? 'N' : 'S'}
+<br />
+{Math.abs(displayPoint.longitude).toFixed(6)}° {displayPoint.longitude >= 0 ? 'E' : 'O'}
+</div>
+<dl className="inspector-data">
+<div>
+<dt>Velocità</dt>
+<dd>
+{displayPoint.speedMps != null ? `${(displayPoint.speedMps * 3.6).toFixed(1)} km/h` : '—'}
+</dd>
+</div>
+<div>
+<dt>Altitudine</dt>
+<dd>
+{displayPoint.altitudeM != null ? `${displayPoint.altitudeM.toFixed(0)} m` : '—'}
+</dd>
+</div>
+<div>
+<dt>Tempo dal precedente</dt>
+<dd>
+{displayPoint.deltaSec != null ? `${displayPoint.deltaSec.toFixed(1)} s` : '—'}
+</dd>
+</div>
+<div>
+<dt>Distanza dal precedente</dt>
+<dd>
+{formatDistance(displayPoint.deltaM)}
+</dd>
+</div>
+<div>
+<dt>Precisione GPS</dt>
+<dd>
+{displayPoint.horizontalAccuracyM != null ? `${displayPoint.horizontalAccuracyM.toFixed(1)} m` : '—'}
+</dd>
+</div>
+</dl>
+<div className="nearby-head">TELEMETRIA VICINA</div>
+{nearbyLoading ? <p className="inspector-muted">Caricamento segnali…</p> : nearby.length ? <div className="nearby-list">
+{nearby.map((item, index) => <div key={`${item.name}-${index}`}>
+<span>
+{item.name.replaceAll('.', ' · ')}
+</span>
+<strong>
+{item.value.toLocaleString('it-IT', { maximumFractionDigits: 2 })} {item.unit}
+</strong>
+</div>)}
+</div> : <p className="inspector-muted">Nessun segnale vicino al punto.</p>}
+</> : <div className="inspector-empty">
+<span>◎</span>
+<p>Passa il mouse sulla traccia o seleziona un punto per ispezionarlo.</p>
+</div>}
+</aside>
+</div>
+<section className="chart-section">
+<div className="section-head">
+<div>
+<span className="eyebrow">SERIE TEMPORALE</span>
+<h2>Segnali del mezzo</h2>
+</div>
+<select className="metric-selector" value={metricName} onChange={e => setMetricName(e.target.value)} aria-label="Seleziona segnale">
+{catalog.length === 0 && <option value="">Nessun segnale</option>}{catalog.map(m => <option key={m.name} value={m.name}>
+{metricLabel(m)} ({m.unit || '—'})</option>)}
+</select>
+</div>
+{catalog.length ? <TelemetryChart samples={metrics} unit={selectedMetric?.unit || ''} selectedAt={displayPoint?.observedAt} onHoverAt={at => setHoverPoint(at ? nearestGps(gps, at) : null)} onSelectAt={at => { const point = nearestGps(gps, at); if (point) setSelectedPoint(point) }} /> : <div className="empty-message">Nessun segnale per questo viaggio.</div>}
+</section>
+</>
+  )
+}

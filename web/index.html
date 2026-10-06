@@ -1,11 +1,22 @@
 <!doctype html>
-<html lang="en">
+<html lang="it">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f4f7f6" />
-    <meta name="description" content="Private vehicle telemetry dashboard" />
-    <title>Opnord · Vehicle telemetry</title>
+    <meta name="theme-color" content="#f5f6f3" />
+    <meta name="description" content="Dashboard privata per GPS e telemetria dei mezzi" />
+    <title>Opnord · Telemetria mezzi</title>
+    <script>
+      try {
+        const saved = localStorage.getItem('opnord.theme')
+        document.documentElement.dataset.theme = saved === 'light' || saved === 'dark'
+          ? saved
+          : matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+      } catch {
+        document.documentElement.dataset.theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+      }
+      document.querySelector('meta[name="theme-color"]').content = document.documentElement.dataset.theme === 'dark' ? '#17211d' : '#f5f6f3'
+    </script>
   </head>
   <body>
     <div id="root"></div>

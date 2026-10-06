@@ -898,12 +898,15 @@ struct DashboardDevice {
     vehicle_id: Uuid,
     display_name: String,
     token_revoked_at: Option<DateTime<Utc>>,
+    last_received_at: Option<DateTime<Utc>>,
 }
 
 async fn devices(State(s): State<App>, headers: HeaderMap) -> Result<Json<Vec<DashboardDevice>>> {
     dashboard(&s.db, &headers).await?;
     let rows = sqlx::query(
-        "SELECT id,vehicle_id,display_name,token_revoked_at FROM devices ORDER BY created_at DESC",
+        "SELECT d.id,d.vehicle_id,d.display_name,d.token_revoked_at,
+                (SELECT max(b.accepted_at) FROM ingest_batches b WHERE b.device_id=d.id) AS last_received_at
+         FROM devices d ORDER BY d.created_at DESC",
     )
     .fetch_all(&s.db)
     .await
@@ -915,6 +918,7 @@ async fn devices(State(s): State<App>, headers: HeaderMap) -> Result<Json<Vec<Da
                 vehicle_id: row.try_get("vehicle_id").map_err(db_err)?,
                 display_name: row.try_get("display_name").map_err(db_err)?,
                 token_revoked_at: row.try_get("token_revoked_at").map_err(db_err)?,
+                last_received_at: row.try_get("last_received_at").map_err(db_err)?,
             })
         })
         .collect::<Result<Vec<_>>>()
@@ -1261,11 +1265,127 @@ struct Vehicle {
     make: Option<String>,
     model: Option<String>,
     model_year: Option<i16>,
+    current_device_id: Option<Uuid>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct VehicleInput {
+    display_name: String,
+    make: Option<String>,
+    model: Option<String>,
+    model_year: Option<i16>,
+}
+
+fn validate_vehicle_input(input: VehicleInput) -> Result<VehicleInput> {
+    let display_name = input.display_name.trim().to_owned();
+    let make = input
+        .make
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let model = input
+        .model
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    if display_name.is_empty()
+        || display_name.len() > 120
+        || make.as_ref().is_some_and(|value| value.len() > 120)
+        || model.as_ref().is_some_and(|value| value.len() > 120)
+        || input
+            .model_year
+            .is_some_and(|year| !(1900..=2100).contains(&year))
+    {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "invalid_vehicle",
+            "invalid vehicle name or details",
+        ));
+    }
+    Ok(VehicleInput {
+        display_name,
+        make,
+        model,
+        model_year: input.model_year,
+    })
+}
+
+async fn create_vehicle(
+    State(s): State<App>,
+    headers: HeaderMap,
+    Json(body): Json<VehicleInput>,
+) -> Result<Json<Vehicle>> {
+    dashboard(&s.db, &headers).await?;
+    let body = validate_vehicle_input(body)?;
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO vehicles(id,display_name,make,model,model_year) VALUES($1,$2,$3,$4,$5)",
+    )
+    .bind(id)
+    .bind(&body.display_name)
+    .bind(&body.make)
+    .bind(&body.model)
+    .bind(body.model_year)
+    .execute(&s.db)
+    .await
+    .map_err(db_err)?;
+    Ok(Json(Vehicle {
+        id,
+        display_name: body.display_name,
+        make: body.make,
+        model: body.model,
+        model_year: body.model_year,
+        current_device_id: None,
+    }))
+}
+
+async fn update_vehicle(
+    State(s): State<App>,
+    headers: HeaderMap,
+    Path(vehicle_id): Path<Uuid>,
+    Json(body): Json<VehicleInput>,
+) -> Result<Json<Vehicle>> {
+    dashboard(&s.db, &headers).await?;
+    let body = validate_vehicle_input(body)?;
+    let updated = sqlx::query(
+        "UPDATE vehicles SET display_name=$2,make=$3,model=$4,model_year=$5 WHERE id=$1",
+    )
+    .bind(vehicle_id)
+    .bind(&body.display_name)
+    .bind(&body.make)
+    .bind(&body.model)
+    .bind(body.model_year)
+    .execute(&s.db)
+    .await
+    .map_err(db_err)?;
+    if updated.rows_affected() != 1 {
+        return Err(err(StatusCode::NOT_FOUND, "not_found", "vehicle not found"));
+    }
+    let current_device_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT a.device_id FROM device_vehicle_assignments a
+         WHERE a.vehicle_id=$1 AND a.unassigned_at IS NULL
+         ORDER BY a.assigned_at DESC LIMIT 1",
+    )
+    .bind(vehicle_id)
+    .fetch_optional(&s.db)
+    .await
+    .map_err(db_err)?;
+    Ok(Json(Vehicle {
+        id: vehicle_id,
+        display_name: body.display_name,
+        make: body.make,
+        model: body.model,
+        model_year: body.model_year,
+        current_device_id,
+    }))
 }
 async fn vehicles(State(s): State<App>, headers: HeaderMap) -> Result<Json<Vec<Vehicle>>> {
     dashboard(&s.db, &headers).await?;
     let rows = sqlx::query(
-        "SELECT id,display_name,make,model,model_year FROM vehicles ORDER BY display_name",
+        "SELECT v.id,v.display_name,v.make,v.model,v.model_year,
+                (SELECT a.device_id FROM device_vehicle_assignments a
+                 WHERE a.vehicle_id=v.id AND a.unassigned_at IS NULL
+                 ORDER BY a.assigned_at DESC LIMIT 1) AS current_device_id
+         FROM vehicles v ORDER BY v.display_name",
     )
     .fetch_all(&s.db)
     .await
@@ -1278,6 +1398,7 @@ async fn vehicles(State(s): State<App>, headers: HeaderMap) -> Result<Json<Vec<V
             make: r.try_get("make").map_err(db_err)?,
             model: r.try_get("model").map_err(db_err)?,
             model_year: r.try_get("model_year").map_err(db_err)?,
+            current_device_id: r.try_get("current_device_id").map_err(db_err)?,
         });
     }
     Ok(Json(out))
@@ -1382,6 +1503,95 @@ struct MetricOut {
     unit: String,
     value: f64,
 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VehicleStatus {
+    trip_id: Option<Uuid>,
+    gps: Option<GpsOut>,
+    metrics: Vec<MetricOut>,
+}
+
+async fn vehicle_status(
+    State(s): State<App>,
+    headers: HeaderMap,
+    Path(vehicle_id): Path<Uuid>,
+) -> Result<Json<VehicleStatus>> {
+    dashboard(&s.db, &headers).await?;
+    let trip_id: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM trips WHERE vehicle_id=$1 ORDER BY started_at DESC LIMIT 1",
+    )
+    .bind(vehicle_id)
+    .fetch_optional(&s.db)
+    .await
+    .map_err(db_err)?;
+    let Some(trip_id) = trip_id else {
+        return Ok(Json(VehicleStatus {
+            trip_id: None,
+            gps: None,
+            metrics: Vec::new(),
+        }));
+    };
+
+    let gps = sqlx::query(
+        "SELECT sample_id,observed_at,delta_sec,delta_m,latitude,longitude,altitude_m,
+                speed_mps,bearing_deg,horizontal_accuracy_m
+         FROM gps_samples WHERE trip_id=$1 ORDER BY observed_at DESC,sample_id DESC LIMIT 1",
+    )
+    .bind(trip_id)
+    .fetch_optional(&s.db)
+    .await
+    .map_err(db_err)?
+    .map(|row| {
+        Ok(GpsOut {
+            sample_id: row.try_get("sample_id").map_err(db_err)?,
+            observed_at: row.try_get("observed_at").map_err(db_err)?,
+            delta_sec: row.try_get("delta_sec").map_err(db_err)?,
+            delta_m: row.try_get("delta_m").map_err(db_err)?,
+            latitude: row.try_get("latitude").map_err(db_err)?,
+            longitude: row.try_get("longitude").map_err(db_err)?,
+            altitude_m: row.try_get("altitude_m").map_err(db_err)?,
+            speed_mps: row.try_get("speed_mps").map_err(db_err)?,
+            bearing_deg: row.try_get("bearing_deg").map_err(db_err)?,
+            horizontal_accuracy_m: row.try_get("horizontal_accuracy_m").map_err(db_err)?,
+        })
+    })
+    .transpose()?;
+
+    let rows = sqlx::query(
+        "SELECT DISTINCT ON (d.name) d.name,d.unit,latest.sample_id,
+                latest.observed_at,latest.value_numeric
+         FROM metric_series s JOIN metric_definitions d ON d.id=s.metric_id
+         JOIN LATERAL (
+             SELECT m.sample_id,m.observed_at,m.value_numeric FROM metric_samples m
+             WHERE m.series_id=s.id ORDER BY m.observed_at DESC LIMIT 1
+         ) latest ON true
+         WHERE s.trip_id=$1
+         ORDER BY d.name,latest.observed_at DESC LIMIT 200",
+    )
+    .bind(trip_id)
+    .fetch_all(&s.db)
+    .await
+    .map_err(db_err)?;
+    let metrics = rows
+        .into_iter()
+        .map(|row| {
+            Ok(MetricOut {
+                sample_id: row.try_get("sample_id").map_err(db_err)?,
+                observed_at: row.try_get("observed_at").map_err(db_err)?,
+                name: row.try_get("name").map_err(db_err)?,
+                unit: row.try_get("unit").map_err(db_err)?,
+                value: row.try_get("value_numeric").map_err(db_err)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Json(VehicleStatus {
+        trip_id: Some(trip_id),
+        gps,
+        metrics,
+    }))
+}
+
 async fn metrics(
     State(s): State<App>,
     headers: HeaderMap,
@@ -1408,6 +1618,62 @@ async fn metrics(
             name: r.try_get("name").map_err(db_err)?,
             unit: r.try_get("unit").map_err(db_err)?,
             value: r.try_get("value_numeric").map_err(db_err)?,
+        });
+    }
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TelemetryAtParams {
+    at: DateTime<Utc>,
+    tolerance_ms: Option<i64>,
+}
+
+async fn telemetry_at(
+    State(s): State<App>,
+    headers: HeaderMap,
+    Path(trip): Path<Uuid>,
+    Query(q): Query<TelemetryAtParams>,
+) -> Result<Json<Vec<MetricOut>>> {
+    dashboard(&s.db, &headers).await?;
+    let tolerance_ms = q.tolerance_ms.unwrap_or(2000);
+    if !(0..=30_000).contains(&tolerance_ms) {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "invalid_query",
+            "toleranceMs must be 0-30000",
+        ));
+    }
+    let rows = sqlx::query(
+        "SELECT DISTINCT ON (d.name) d.name,d.unit,nearest.sample_id,
+                nearest.observed_at,nearest.value_numeric
+         FROM metric_series s JOIN metric_definitions d ON d.id=s.metric_id
+         JOIN LATERAL (
+             SELECT m.sample_id,m.observed_at,m.value_numeric FROM metric_samples m
+             WHERE m.series_id=s.id
+               AND m.observed_at BETWEEN $2 - ($3::bigint * interval '1 millisecond')
+                                     AND $2 + ($3::bigint * interval '1 millisecond')
+             ORDER BY abs(extract(epoch FROM m.observed_at-$2)),m.observed_at LIMIT 1
+         ) nearest ON true
+         WHERE s.trip_id=$1
+         ORDER BY d.name,abs(extract(epoch FROM nearest.observed_at-$2)),nearest.observed_at
+         LIMIT 1000",
+    )
+    .bind(trip)
+    .bind(q.at)
+    .bind(tolerance_ms)
+    .fetch_all(&s.db)
+    .await
+    .map_err(db_err)?;
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        out.push(MetricOut {
+            sample_id: row.try_get("sample_id").map_err(db_err)?,
+            observed_at: row.try_get("observed_at").map_err(db_err)?,
+            name: row.try_get("name").map_err(db_err)?,
+            unit: row.try_get("unit").map_err(db_err)?,
+            value: row.try_get("value_numeric").map_err(db_err)?,
         });
     }
     Ok(Json(out))
@@ -1582,10 +1848,16 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             "/api/v1/devices/:device_id/rotate-token",
             post(rotate_device_token),
         )
-        .route("/api/v1/vehicles", get(vehicles))
+        .route("/api/v1/vehicles", get(vehicles).post(create_vehicle))
+        .route(
+            "/api/v1/vehicles/:vehicle_id",
+            axum::routing::put(update_vehicle),
+        )
         .route("/api/v1/vehicles/:vehicle_id/trips", get(trips))
+        .route("/api/v1/vehicles/:vehicle_id/status", get(vehicle_status))
         .route("/api/v1/trips/:trip_id/gps", get(gps))
         .route("/api/v1/trips/:trip_id/metrics", get(metrics))
+        .route("/api/v1/trips/:trip_id/telemetry-at", get(telemetry_at))
         .route("/api/v1/trips/:trip_id/metric-catalog", get(metric_catalog))
         .route("/api/v1/geo/correlations", get(geo_correlations))
         .with_state(App { db, cookie_secure })

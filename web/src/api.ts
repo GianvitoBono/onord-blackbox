@@ -7,6 +7,8 @@ export type Vehicle = {
   currentDeviceId?: string | null
 }
 
+export type VehicleInput = { displayName: string; make?: string | null; model?: string | null; modelYear?: number | null }
+
 export type Trip = {
   id: string
   startedAt: string
@@ -28,7 +30,7 @@ export type DeviceStatus = {
   batteryTempC?: number | null
 }
 
-export type ManagedDevice = { id: string; vehicleId: string; displayName: string; tokenRevokedAt?: string | null }
+export type ManagedDevice = { id: string; vehicleId: string; displayName: string; tokenRevokedAt?: string | null; lastReceivedAt?: string | null }
 export type PendingDevice = { deviceId: string; reason: string; firstSeenAt: string; lastSeenAt: string; attemptCount: number; lastBatchId: string; vehicleId?: string; displayName?: string; approvable: boolean }
 export type RotatedDeviceToken = { deviceId: string; deviceToken: string; credentialsFileUpdated?: boolean }
 
@@ -47,6 +49,7 @@ export type GpsSample = {
 
 export type MetricDefinition = { name: string; unit: string; description?: string | null }
 export type MetricSample = { sampleId: string; observedAt: string; name: string; unit: string; value: number }
+export type VehicleStatus = { tripId: string | null; gps: GpsSample | null; metrics: MetricSample[] }
 
 export class ApiError extends Error {
   constructor(message: string, readonly status?: number) {
@@ -102,20 +105,20 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     })
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error
-    throw new ApiError('Could not reach the API. Check the server address and connection.')
+    throw new ApiError('API non raggiungibile. Controlla indirizzo e connessione.')
   }
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) {
-      throw new ApiError('Your session has expired. Sign in again.', response.status)
+      throw new ApiError('Sessione scaduta. Accedi di nuovo.', response.status)
     }
-    if (response.status === 404) throw new ApiError('This read endpoint is not available yet.', 404)
-    throw new ApiError(`The API returned an error (${response.status}).`, response.status)
+    if (response.status === 404) throw new ApiError('Risorsa non trovata.', 404)
+    throw new ApiError(`Errore API (${response.status}).`, response.status)
   }
   if (response.status === 204) return [] as T
   try {
     return (await response.json()) as T
   } catch {
-    throw new ApiError('The API response was not valid JSON.', response.status)
+    throw new ApiError('Risposta API non valida.', response.status)
   }
 }
 
@@ -133,6 +136,18 @@ export async function logout(): Promise<void> {
 
 export async function fetchVehicles(signal?: AbortSignal) {
   return unwrapList<Vehicle & Record<string, unknown>>(await request<unknown>('/api/v1/vehicles', { signal })).map(normalizeVehicle)
+}
+
+export async function fetchVehicleStatus(vehicleId: string, signal?: AbortSignal): Promise<VehicleStatus> {
+  return request<VehicleStatus>(`/api/v1/vehicles/${encodeURIComponent(vehicleId)}/status`, { signal })
+}
+
+export async function createVehicle(input: VehicleInput): Promise<Vehicle> {
+  return normalizeVehicle(await request<Vehicle & Record<string, unknown>>('/api/v1/vehicles', { method: 'POST', body: JSON.stringify(input) }))
+}
+
+export async function updateVehicle(vehicleId: string, input: VehicleInput): Promise<Vehicle> {
+  return normalizeVehicle(await request<Vehicle & Record<string, unknown>>(`/api/v1/vehicles/${encodeURIComponent(vehicleId)}`, { method: 'PUT', body: JSON.stringify(input) }))
 }
 
 export async function fetchDevices(signal?: AbortSignal): Promise<ManagedDevice[]> {
@@ -161,8 +176,13 @@ export async function fetchDeviceStatus(deviceId: string, signal?: AbortSignal) 
 }
 
 export async function fetchTripGps(tripId: string, signal?: AbortSignal) {
-  const params = new URLSearchParams({ limit: '300' })
+  const params = new URLSearchParams({ limit: '5000' })
   return unwrapList<GpsSample>(await request<unknown>(`/api/v1/trips/${encodeURIComponent(tripId)}/gps?${params}`, { signal }))
+}
+
+export async function fetchTripTelemetryAt(tripId: string, at: string, toleranceMs = 2000, signal?: AbortSignal): Promise<MetricSample[]> {
+  const params = new URLSearchParams({ at, toleranceMs: String(toleranceMs) })
+  return unwrapList<MetricSample>(await request<unknown>(`/api/v1/trips/${encodeURIComponent(tripId)}/telemetry-at?${params}`, { signal }))
 }
 
 export async function fetchTripMetricCatalog(tripId: string, signal?: AbortSignal): Promise<MetricDefinition[]> {

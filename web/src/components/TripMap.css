@@ -1,0 +1,57 @@
+.trip-map {
+  position: relative;
+  width: 100%;
+  height: min(68vh, 760px);
+  min-height: 420px;
+  overflow: hidden;
+  border-radius: 16px;
+  background: #e7ece8;
+  isolation: isolate;
+}
+
+.trip-map__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
+
+.trip-map .leaflet-container {
+  width: 100%;
+  height: 100%;
+  background: #e7ece8;
+  font: inherit;
+}
+
+.trip-map .leaflet-control-attribution {
+  border-radius: 5px 0 0;
+  font-size: 10px;
+}
+
+.trip-map__empty {
+  position: absolute;
+  z-index: 500;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #66736f;
+  background: rgb(241 244 241 / 84%);
+  font-size: 14px;
+  pointer-events: none;
+}
+
+[data-theme="dark"] .trip-map { background: #18242a; }
+[data-theme="dark"] .trip-map .leaflet-container { background: #18242a; }
+[data-theme="dark"] .trip-map--osm-default .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.78) contrast(1.08) saturate(.72); }
+[data-theme="dark"] .trip-map .leaflet-control-attribution { background: rgb(21 34 41 / 88%); color: #c8d3d4; }
+[data-theme="dark"] .trip-map .leaflet-control-attribution a { color: #9cd6c5; }
+[data-theme="dark"] .trip-map__empty { color: #aebdbd; background: rgb(24 36 42 / 88%); }
+
+@media (max-width: 720px) {
+  .trip-map {
+    height: 56vh;
+    min-height: 320px;
+    border-radius: 12px;
+  }
+}

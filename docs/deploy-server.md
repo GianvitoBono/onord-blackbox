@@ -60,4 +60,6 @@ docker compose --env-file .env.server -f compose.server.yaml exec -T timescaledb
 
 Aggiornamento: recuperare nuovo codice, poi rieseguire `docker compose --env-file .env.server -f compose.server.yaml up -d --build`. Non usare `down -v`: elimina i volumi. La password del database in `.env.server` deve restare uguale ai dati già inizializzati; cambiarla richiede rotazione PostgreSQL esplicita.
 
+La mappa usa per default le tile OpenStreetMap nel browser con attribuzione visibile. Per cambiare provider impostare `VITE_MAP_TILE_URL` e `VITE_MAP_ATTRIBUTION` in `.env.server` e ricostruire `web`.
+
 L'endpoint login non ha ancora rate limiting. Prima di esporre il dominio a Internet, aggiungere protezione al login (per esempio limite richieste sul reverse proxy) e predisporre backup automatici. Non esporre direttamente la porta PostgreSQL.

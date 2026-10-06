@@ -51,6 +51,9 @@ services:
     build:
       context: .
       dockerfile: deploy/web.Dockerfile
+      args:
+        VITE_MAP_TILE_URL: ${VITE_MAP_TILE_URL:-}
+        VITE_MAP_ATTRIBUTION: ${VITE_MAP_ATTRIBUTION:-}
     environment:
       DOMAIN: ${DOMAIN:?Set DOMAIN in .env.server}
       ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL in .env.server}

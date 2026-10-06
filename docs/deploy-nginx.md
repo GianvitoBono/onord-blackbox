@@ -63,6 +63,8 @@ location / {
 
 `proxy_pass` senza URI finale conserva `/api/v1/...`. Se `NGINX_UPSTREAM_PORT` cambia, aggiornare anche porta in Nginx. Non inserire `DASHBOARD_LOCAL_HTTP_CONTAINER=true`: quella opzione appartiene solo al Compose HTTP locale.
 
+La mappa usa per default le tile OpenStreetMap direttamente dal browser, con attribuzione visibile. Per un provider OSM diverso impostare `VITE_MAP_TILE_URL` e `VITE_MAP_ATTRIBUTION` in `.env.nginx`, poi ricostruire l'immagine `web`; sono valori incorporati nella build frontend. Non usare prefetch o download massivi delle tile.
+
 Prima ricaricare configurazione Nginx con `nginx -t` e il metodo di reload del proprio server. Poi aprire `https://blackbox.example.com/`; nell'app Nord usare come backend URL `https://blackbox.example.com`. Il token dispositivo resta distinto dal login dashboard.
 
 Se Nginx gira in **un altro container**, `127.0.0.1` indica quel container: collegarlo alla rete Docker del progetto e usare `proxy_pass http://web:80;` oppure pubblicare un upstream raggiungibile dal suo network. La configurazione qui assume Nginx sull'host.
