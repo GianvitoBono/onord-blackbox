@@ -44,6 +44,8 @@ Stato al 2026-10-06. Le caselle indicano lavoro completato nel repository, non u
 
 ## P2 — OBD
 
+- [x] Backend: HTTP 400 `invalid_raw_obd_reply` correggibile con migrazione 0013 e supporto `incomplete_or_malformed`; compatibilità con batch Android già accodati, senza modificare o cancellare dati locali.
+
 - [x] Scelta iniziale BT classico SPP, permesso Bluetooth e selettore dispositivi già associati.
 - [ ] **Pairing OBD ripetuto:** il dongle aveva richiesto più volte il PIN. Sul Nord, `dumpsys bluetooth_manager` mostrava `BONDED` ma tre sequenze di associazione nella giornata. L'app tenta SPP sicuro e poi compatibile, senza chiamare `createBond`/`removeBond`. Acquisire log Bluetooth al prossimo distacco/ricollegamento, verificare persistenza della chiave su telefono e adattatore e distinguere perdita del bond da fallimento socket. Criterio: tre cicli di spegnimento/riaccensione adattatore e un riavvio telefono, riconnessione SPP senza reinserire PIN né perdere telemetria.
 - [x] App 0.1.14: OBD avviato dal monitor anche prima del viaggio quando il telefono è alimentato, o durante un viaggio; tentativi ogni 5 s, stato e causa visibili. Fallback SPP compatibile dopo fallimento SPP sicuro o setup ELM; nessun reset automatico del bond. Da verificare in auto con dongle reale.

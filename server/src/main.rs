@@ -152,6 +152,26 @@ struct RawObdReply {
     raw_response: String,
     parse_status: String,
 }
+
+fn raw_obd_status_allowed(status: &str) -> bool {
+    matches!(status, "complete" | "captured" | "unsupported" | "malformed"
+        | "incomplete_or_malformed" | "adapter_error" | "timeout" | "error")
+}
+
+#[cfg(test)]
+mod raw_obd_contract_tests {
+    use super::raw_obd_status_allowed;
+
+    #[test]
+    fn accepts_android_statuses_including_incomplete_isotp() {
+        for status in ["complete", "captured", "unsupported", "malformed",
+            "incomplete_or_malformed", "adapter_error", "timeout", "error"] {
+            assert!(raw_obd_status_allowed(status), "Android status rejected: {status}");
+        }
+        assert!(!raw_obd_status_allowed("unknown"));
+    }
+
+}
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Ack {
@@ -883,7 +903,7 @@ async fn ingest(
             || !reply.command.bytes().all(|c| c.is_ascii_alphanumeric())
             || reply.ecu_id.as_ref().is_some_and(|ecu| ecu.is_empty() || ecu.len() > 16)
             || reply.response_bytes.len() > 2048 || reply.raw_response.len() > 4096
-            || !matches!(reply.parse_status.as_str(), "complete" | "captured" | "unsupported" | "malformed" | "adapter_error" | "timeout" | "error")
+            || !raw_obd_status_allowed(&reply.parse_status)
             || reply.observed_at < batch.trip.started_at
         {
             return Err(err(StatusCode::BAD_REQUEST, "invalid_raw_obd_reply", "invalid raw OBD reply metadata or size"));

@@ -115,3 +115,5 @@ Dashboard reads require the session cookie and return arrays directly. Device be
 The GPS read API supports a cursor. Metrics and geospatial reads require time bounds and cap returned rows; large historical queries still need cursor/downsample APIs.
 
 Deploy the backend with migrations 0011–0012 before installing an APK that sends `rawObdReplies`. Old APKs remain compatible. Raw replies collected by the new APK are queued offline until the server accepts and acknowledges them.
+
+Migration 0013 also accepts Android's `incomplete_or_malformed` status for incomplete ISO-TP captures. Deploy the updated backend to unblock existing HTTP 400 `invalid_raw_obd_reply` batches; no APK update or local data reset is needed. Raw bytes and the original status are preserved.
