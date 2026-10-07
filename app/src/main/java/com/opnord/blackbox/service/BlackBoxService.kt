@@ -82,6 +82,12 @@ class BlackBoxService : LifecycleService() {
                 }
             }
         }
+        scope.launch {
+            while (isActive) {
+                delay(5_000)
+                lifecycleMutex.withLock { handleTripClock() }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -109,7 +115,12 @@ class BlackBoxService : LifecycleService() {
         monitorStarted = true
         if (tripId != null) startActiveCollection(tripId!!)
         startLocations(idle = tripId == null)
-        updateNotification(if (tripId == null) "Ricerca movimento" else "Viaggio in corso")
+        val stopped = tripId?.let { db.events().openStop(it) } != null
+        updateNotification(when {
+            tripId == null -> "Ricerca movimento"
+            stopped -> "Sosta in corso"
+            else -> "Viaggio in corso"
+        })
     }
 
     private suspend fun stopMonitoring() {
@@ -168,6 +179,11 @@ class BlackBoxService : LifecycleService() {
             decision.stopEnd?.let { insertStopBoundary(activeId, it.stopId, "stop_end", it.observedAt, it.latitude, it.longitude) }
             if (decision.closeTrip) db.trips().close(activeId, location.time, "stationary_timeout")
         }
+        if (decision.stopStart != null) {
+            updateNotification("Sosta in corso")
+            TelemetrySyncWorker.scheduleOnce(this)
+        }
+        if (decision.stopEnd != null && !decision.closeTrip) updateNotification("Viaggio in corso")
         if (decision.closeTrip) {
             tripId = null
             recentLocations.clear()
@@ -179,6 +195,27 @@ class BlackBoxService : LifecycleService() {
         getSharedPreferences("diagnostics", MODE_PRIVATE).edit()
             .putLong("last_gps", location.time)
             .putString("gps_status", if (decision.closeTrip) "Ricerca movimento" else "GPS attivo").apply()
+    }
+
+    private suspend fun handleTripClock() {
+        if (!monitorStarted) return
+        val activeId = tripId ?: return
+        val now = System.currentTimeMillis()
+        val decision = detector.tick(now, obdMotion)
+        if (decision.stopStart == null && !decision.closeTrip) return
+        if (decision.closeTrip) stopActiveCollection()
+        db.withTransaction {
+            decision.stopStart?.let { insertStopBoundary(activeId, it.stopId, "stop_start", it.observedAt, it.latitude, it.longitude) }
+            decision.stopEnd?.let { insertStopBoundary(activeId, it.stopId, "stop_end", it.observedAt, it.latitude, it.longitude) }
+            if (decision.closeTrip) db.trips().close(activeId, now, "stationary_timeout")
+        }
+        if (decision.closeTrip) {
+            tripId = null
+            recentLocations.clear()
+            startLocations(idle = true)
+            updateNotification("Ricerca movimento")
+        } else updateNotification("Sosta in corso")
+        TelemetrySyncWorker.scheduleOnce(this)
     }
 
     private suspend fun startTrip() {
@@ -262,11 +299,14 @@ class BlackBoxService : LifecycleService() {
                 ObdPoller(BluetoothSppObdTransport(device), onReading = { reading ->
                     val v = reading.values
                     val speed = v[ObdPid.SPEED]
+                    val rpm = v[ObdPid.RPM]
                     val accelerator = v[ObdPid.ACCELERATOR_PEDAL_D] ?: v[ObdPid.ACCELERATOR_PEDAL_E] ?: v[ObdPid.ACCELERATOR_PEDAL]
                     val previousMotion = obdMotion
                     obdMotion = previousMotion.copy(
                         speedKmh = speed ?: previousMotion.speedKmh,
                         speedAt = if (speed != null) reading.observedAt else previousMotion.speedAt,
+                        rpm = rpm ?: previousMotion.rpm,
+                        rpmAt = if (rpm != null) reading.observedAt else previousMotion.rpmAt,
                         acceleratorPct = accelerator ?: previousMotion.acceleratorPct,
                         acceleratorAt = if (accelerator != null) reading.observedAt else previousMotion.acceleratorAt
                     )
