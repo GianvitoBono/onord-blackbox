@@ -31,11 +31,12 @@ class ObdPoller(
     private val onDiscovery: (supported: Int, known: Int, raw: Int) -> Unit = { _, _, _ -> }
 ) {
     suspend fun run() {
-        var retry = 0
+        var attempt = 0
         try {
         while (true) {
             try {
-                onStatus("connecting")
+                attempt++
+                onStatus("connessione OBD: tentativo $attempt")
                 withTimeout(10_000) { transport.connect() }
                 // Preserve ECU headers when supported; a clone rejecting this setting must not stop polling.
                 try {
@@ -44,8 +45,9 @@ class ObdPoller(
                 }
                 catch (e: CancellationException) { throw e }
                 catch (_: Exception) { onStatus("connected; ECU header unavailable") }
-                retry = 0
                 val supported = discover()
+                if (supported.isEmpty()) throw IllegalStateException("nessun PID OBD rilevato")
+                attempt = 0
                 // Frequent driving signals first; slower/less useful values rotate in bounded batches.
                 val priority = listOf(ObdPid.RPM, ObdPid.SPEED, ObdPid.ACCELERATOR_PEDAL_D, ObdPid.ENGINE_LOAD, ObdPid.THROTTLE,
                     ObdPid.MAP, ObdPid.BAROMETRIC_PRESSURE, ObdPid.DEMANDED_TORQUE, ObdPid.ACTUAL_TORQUE)
@@ -148,10 +150,9 @@ class ObdPoller(
                 }
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) {
-                onStatus("disconnected: ${e.message ?: "adapter error"}")
+                onStatus("OBD non connesso: ${e.message ?: "errore adattatore"}; nuovo tentativo tra 5 s")
                 runCatching { transport.disconnect() }
-                delay((1_000L shl retry.coerceIn(0, 4)).coerceAtMost(15_000))
-                retry++
+                delay(5_000)
             }
         }
         } finally {

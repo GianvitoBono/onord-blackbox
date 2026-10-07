@@ -21,18 +21,58 @@ interface ObdTransport {
 
 class BluetoothSppObdTransport(private val device: BluetoothDevice) : ObdTransport {
     private var socket: BluetoothSocket? = null
+    var linkMode: String = "non connesso"
+        private set
     private val watchdogScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     override suspend fun connect() = withContext(Dispatchers.IO) {
         disconnect()
         val beforeBondState = runCatching { device.bondState }.getOrDefault(BluetoothDevice.BOND_NONE)
         if (beforeBondState != BluetoothDevice.BOND_BONDED) {
-            throw IOException("Bluetooth bond missing (bondState=$beforeBondState); pair the OBD adapter in Android settings")
+            throw IOException("associazione Bluetooth assente (stato=$beforeBondState); associa adattatore nelle impostazioni Android")
         }
-        val candidate = try {
-            device.createRfcommSocketToServiceRecord(SPP_UUID)
+        try {
+            openAndInitialize(secure = true)
+            return@withContext
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: SecurityException) {
+            throw e
+        } catch (secureError: Exception) {
+            // Some ELM clones expose serial SPP but cannot complete authenticated RFCOMM or ELM setup.
+            disconnect()
+            if (device.bondState != BluetoothDevice.BOND_BONDED) {
+                throw IOException("SPP secure failed; Bluetooth bond lost: ${secureError.message}", secureError)
+            }
+            try {
+                openAndInitialize(secure = false)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SecurityException) {
+                throw e
+            } catch (insecureError: Exception) {
+                throw IOException("SPP secure failed: ${secureError.message}; compatible SPP failed: ${insecureError.message}", insecureError)
+            }
+        }
+    }
+
+    private suspend fun openAndInitialize(secure: Boolean) {
+        socket = openSocket(secure)
+        linkMode = if (secure) "SPP sicuro" else "SPP compatibile"
+        try {
+            exchange("ATZ", 5_000)
+            for (cmd in listOf("ATE0", "ATL0", "ATS0", "ATH0", "ATSP0")) {
+                val reply = exchange(cmd, 5_000)
+                if (!reply.contains("OK", ignoreCase = true)) throw IOException("ELM setup $cmd: ${reply.trim().take(80)}")
+            }
         } catch (e: Exception) {
-            throw IOException("SPP socket creation failed while adapter is bonded: ${e.message ?: e.javaClass.simpleName}", e)
+            disconnect()
+            throw e
         }
+    }
+
+    private suspend fun openSocket(secure: Boolean): BluetoothSocket {
+        val candidate = if (secure) device.createRfcommSocketToServiceRecord(SPP_UUID)
+            else device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
         val watchdog = watchdogScope.launch { delay(10_000); runCatching { candidate.close() } }
         try {
             candidate.connect()
@@ -41,15 +81,11 @@ class BluetoothSppObdTransport(private val device: BluetoothDevice) : ObdTranspo
             throw e
         } catch (e: Exception) {
             runCatching { candidate.close() }
-            val afterBondState = runCatching { device.bondState }.getOrDefault(BluetoothDevice.BOND_NONE)
-            val bondDetail = if (afterBondState == BluetoothDevice.BOND_BONDED) "bond still present" else "bond lost during connection (bondState=$afterBondState)"
-            throw IOException("SPP socket connect failed; $bondDetail: ${e.message ?: e.javaClass.simpleName}", e)
+            throw IOException("${if (secure) "secure" else "compatible"} SPP connect failed: ${e.message ?: e.javaClass.simpleName}", e)
         } finally {
             watchdog.cancel()
         }
-        socket = candidate
-        // Basic ELM setup; errors are passed through and will be handled by the client.
-        for (cmd in listOf("ATZ", "ATE0", "ATL0", "ATS0", "ATH0", "ATSP0")) exchange(cmd, 5_000)
+        return candidate
     }
 
     override suspend fun exchange(command: String, timeoutMs: Long): String = withContext(Dispatchers.IO) {
@@ -73,7 +109,7 @@ class BluetoothSppObdTransport(private val device: BluetoothDevice) : ObdTranspo
     }
 
     override suspend fun disconnect() = withContext(Dispatchers.IO) {
-        runCatching { socket?.close() }; socket = null
+        runCatching { socket?.close() }; socket = null; linkMode = "non connesso"
     }
 
     companion object { val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB") }

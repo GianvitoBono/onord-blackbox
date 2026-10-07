@@ -33,9 +33,10 @@ class BlackBoxService : LifecycleService() {
     private val locationQueue = Channel<Location>(Channel.UNLIMITED)
     private val recentLocations = ArrayDeque<Location>()
     private var lastProcessedLocationAt = 0L
-    private var tripId: String? = null
+    @Volatile private var tripId: String? = null
     private var sampler: Job? = null
     private var obdJob: Job? = null
+    private var obdAddressInUse: String? = null
     private var recovery: Job? = null
     private lateinit var locations: LocationCollector
     private var wakeLock: PowerManager.WakeLock? = null
@@ -88,6 +89,12 @@ class BlackBoxService : LifecycleService() {
                 lifecycleMutex.withLock { handleTripClock() }
             }
         }
+        scope.launch {
+            while (isActive) {
+                delay(5_000)
+                lifecycleMutex.withLock { reconcileObdCollection() }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -110,11 +117,13 @@ class BlackBoxService : LifecycleService() {
     private suspend fun startMonitoring() {
         if (monitorStarted) {
             startLocations(idle = tripId == null)
+            reconcileObdCollection()
             return
         }
         monitorStarted = true
         if (tripId != null) startActiveCollection(tripId!!)
         startLocations(idle = tripId == null)
+        reconcileObdCollection()
         val stopped = tripId?.let { db.events().openStop(it) } != null
         updateNotification(when {
             tripId == null -> "Ricerca movimento"
@@ -128,6 +137,8 @@ class BlackBoxService : LifecycleService() {
             monitorStarted = false
             locations.stop()
             stopActiveCollection()
+            stopObdCollection()
+            getSharedPreferences("diagnostics", MODE_PRIVATE).edit().putString("obd_status", "monitor fermo").apply()
             tripId?.let { activeId ->
                 val endedAt = System.currentTimeMillis()
                 db.withTransaction {
@@ -189,6 +200,7 @@ class BlackBoxService : LifecycleService() {
             recentLocations.clear()
             recentLocations.addLast(Location(location))
             startLocations(idle = true)
+            reconcileObdCollection()
             updateNotification("Ricerca movimento")
             TelemetrySyncWorker.scheduleOnce(this)
         }
@@ -213,6 +225,7 @@ class BlackBoxService : LifecycleService() {
             tripId = null
             recentLocations.clear()
             startLocations(idle = true)
+            reconcileObdCollection()
             updateNotification("Ricerca movimento")
         } else updateNotification("Sosta in corso")
         TelemetrySyncWorker.scheduleOnce(this)
@@ -227,6 +240,7 @@ class BlackBoxService : LifecycleService() {
         }
         tripId = trip.id
         startActiveCollection(trip.id)
+        reconcileObdCollection()
         startLocations(idle = false)
         updateNotification("Viaggio in corso")
         getSharedPreferences("diagnostics", MODE_PRIVATE).edit().putLong("last_gps", recentLocations.last().time)
@@ -259,11 +273,9 @@ class BlackBoxService : LifecycleService() {
     }
 
     private fun startActiveCollection(forTripId: String) {
-        obdMotion = ObdMotionEvidence()
         if (wakeLock == null) {
             wakeLock = (getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "VehicleBlackbox:logging").apply { setReferenceCounted(false); acquire() })
         }
-        startObdCollection(forTripId)
         sampler?.cancel()
         sampler = scope.launch {
             while (isActive) {
@@ -280,23 +292,45 @@ class BlackBoxService : LifecycleService() {
     private suspend fun stopActiveCollection() {
         obdMotion = ObdMotionEvidence()
         sampler?.cancelAndJoin(); sampler = null
-        obdJob?.cancelAndJoin(); obdJob = null
-        getSharedPreferences("diagnostics", MODE_PRIVATE).edit().putString("obd_status", "in attesa di un viaggio attivo").apply()
         wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null
     }
 
-    private fun startObdCollection(forTripId: String) {
-        obdJob?.cancel(); obdJob = null
+    private fun externallyPowered(): Boolean {
+        val battery = registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        return (battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0 ||
+            getSystemService(BatteryManager::class.java).isCharging
+    }
+
+    private suspend fun stopObdCollection() {
+        obdJob?.cancelAndJoin(); obdJob = null
+        obdAddressInUse = null
+    }
+
+    private suspend fun reconcileObdCollection() {
+        val prefs = getSharedPreferences("diagnostics", MODE_PRIVATE)
         val address = getSharedPreferences("obd_configuration", MODE_PRIVATE).getString("address", "").orEmpty()
-        if (address.isBlank()) return
-        if (Build.VERSION.SDK_INT >= 31 && ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            getSharedPreferences("diagnostics", MODE_PRIVATE).edit().putString("obd_status", "Bluetooth permission missing").apply(); return
+        val wanted = monitorStarted && address.isNotBlank() && (externallyPowered() || tripId != null)
+        if (!wanted) {
+            if (obdJob != null) stopObdCollection()
+            prefs.edit().putString("obd_status", when {
+                !monitorStarted -> "monitor fermo"
+                address.isBlank() -> "adattatore OBD non configurato"
+                else -> "in attesa di alimentazione"
+            }).apply()
+            return
         }
+        if (obdJob?.isActive == true && obdAddressInUse == address) return
+        stopObdCollection()
+        if (Build.VERSION.SDK_INT >= 31 && ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            prefs.edit().putString("obd_status", "Permesso Bluetooth mancante").apply(); return
+        }
+        obdAddressInUse = address
         obdJob = scope.launch {
             try {
                 val device = BluetoothAdapter.getDefaultAdapter()?.getRemoteDevice(address)
-                if (device == null) return@launch
-                ObdPoller(BluetoothSppObdTransport(device), onReading = { reading ->
+                    ?: throw IllegalStateException("Bluetooth non disponibile")
+                val transport = BluetoothSppObdTransport(device)
+                ObdPoller(transport, onReading = { reading ->
                     val v = reading.values
                     val speed = v[ObdPid.SPEED]
                     val rpm = v[ObdPid.RPM]
@@ -310,8 +344,9 @@ class BlackBoxService : LifecycleService() {
                         acceleratorPct = accelerator ?: previousMotion.acceleratorPct,
                         acceleratorAt = if (accelerator != null) reading.observedAt else previousMotion.acceleratorAt
                     )
-                    db.samples().insert(TelemetrySampleEntity(
-                        UUID.randomUUID().toString(), forTripId, reading.observedAt,
+                    val activeId = tripId
+                    if (activeId != null) db.samples().insert(TelemetrySampleEntity(
+                        UUID.randomUUID().toString(), activeId, reading.observedAt,
                         powerConnected = getSystemService(BatteryManager::class.java).isCharging,
                         obdRpm = v[ObdPid.RPM], obdSpeedKmh = v[ObdPid.SPEED], obdEngineLoadPct = v[ObdPid.ENGINE_LOAD],
                         obdThrottlePct = v[ObdPid.THROTTLE], obdCoolantC = v[ObdPid.COOLANT], obdIntakeTempC = v[ObdPid.INTAKE_TEMP],
@@ -336,8 +371,9 @@ class BlackBoxService : LifecycleService() {
                         .putInt("obd_last_values", v.size + reading.subvalues.size + reading.rawValues.size + reading.derived.size).apply()
                 }, onRawReply = { reply ->
                     try {
-                        db.rawReplies().insert(ObdRawReplyEntity(
-                            UUID.randomUUID().toString(), forTripId, reply.observedAt, reply.mode, reply.pid, reply.command,
+                        val activeId = tripId
+                        if (activeId != null) db.rawReplies().insert(ObdRawReplyEntity(
+                            UUID.randomUUID().toString(), activeId, reply.observedAt, reply.mode, reply.pid, reply.command,
                             reply.ecuId, reply.responseBytes.joinToString("") { "%02X".format(it) }, reply.rawResponse, reply.parseStatus
                         ))
                     } catch (error: CancellationException) {
@@ -346,7 +382,14 @@ class BlackBoxService : LifecycleService() {
                         getSharedPreferences("diagnostics", MODE_PRIVATE).edit()
                             .putString("obd_raw_status", "Salvataggio risposta OBD fallito: ${error.javaClass.simpleName}").apply()
                     }
-                }, onStatus = { status -> getSharedPreferences("diagnostics", MODE_PRIVATE).edit().putString("obd_status", status).apply() },
+                }, onStatus = { status ->
+                    val detail = if (status.startsWith("connected;")) "$status; ${transport.linkMode}" else status
+                    val edit = getSharedPreferences("diagnostics", MODE_PRIVATE).edit()
+                        .putString("obd_status", detail).putLong("obd_status_at", System.currentTimeMillis())
+                    if (status.startsWith("OBD non connesso:")) edit.putString("obd_last_error", status)
+                    if (status.startsWith("connected;")) edit.remove("obd_last_error")
+                    edit.apply()
+                },
                     onDiscovery = { supported, known, raw -> getSharedPreferences("diagnostics", MODE_PRIVATE).edit()
                         .putInt("obd_supported", supported).putInt("obd_known", known).putInt("obd_raw", raw).apply() }).run()
             } catch (e: SecurityException) {
@@ -362,8 +405,7 @@ class BlackBoxService : LifecycleService() {
     private suspend fun scanDiagnostics() {
         val prefs = getSharedPreferences("diagnostics", MODE_PRIVATE)
         prefs.edit().putString("diagnostic_status", "scansione in corso").remove("diagnostic_summary").apply()
-        obdJob?.cancelAndJoin()
-        obdJob = null
+        stopObdCollection()
         try {
             val address = getSharedPreferences("obd_configuration", MODE_PRIVATE).getString("address", "").orEmpty()
             require(address.isNotBlank()) { "Adattatore OBD non configurato" }
@@ -387,7 +429,7 @@ class BlackBoxService : LifecycleService() {
             prefs.edit().putString("diagnostic_status", "errore: ${error.message ?: error.javaClass.simpleName}").apply()
         } finally {
             when {
-                monitorStarted && tripId != null -> startObdCollection(tripId!!)
+                monitorStarted -> reconcileObdCollection()
                 !monitorStarted && tripId != null -> startMonitoring()
                 !monitorStarted -> stopSelf()
             }
@@ -398,8 +440,7 @@ class BlackBoxService : LifecycleService() {
         val prefs = getSharedPreferences("diagnostics", MODE_PRIVATE)
         prefs.edit().putString("ecu_identity_status", "lettura in corso")
             .remove("ecu_identity_summary").remove("ecu_identity_report").apply()
-        obdJob?.cancelAndJoin()
-        obdJob = null
+        stopObdCollection()
         try {
             val address = getSharedPreferences("obd_configuration", MODE_PRIVATE).getString("address", "").orEmpty()
             require(address.isNotBlank()) { "Adattatore OBD non configurato" }
@@ -421,7 +462,7 @@ class BlackBoxService : LifecycleService() {
             prefs.edit().putString("ecu_identity_status", "errore: ${error.message ?: error.javaClass.simpleName}").apply()
         } finally {
             when {
-                monitorStarted && tripId != null -> startObdCollection(tripId!!)
+                monitorStarted -> reconcileObdCollection()
                 !monitorStarted && tripId != null -> startMonitoring()
                 !monitorStarted -> stopSelf()
             }
@@ -432,8 +473,7 @@ class BlackBoxService : LifecycleService() {
         val prefs = getSharedPreferences("diagnostics", MODE_PRIVATE)
         prefs.edit().putString("mode01_capture_status", "acquisizione in corso")
             .remove("mode01_capture_report").apply()
-        obdJob?.cancelAndJoin()
-        obdJob = null
+        stopObdCollection()
         try {
             val address = getSharedPreferences("obd_configuration", MODE_PRIVATE).getString("address", "").orEmpty()
             require(address.isNotBlank()) { "Adattatore OBD non configurato" }
@@ -455,7 +495,7 @@ class BlackBoxService : LifecycleService() {
             prefs.edit().putString("mode01_capture_status", "errore: ${error.message ?: error.javaClass.simpleName}").apply()
         } finally {
             when {
-                monitorStarted && tripId != null -> startObdCollection(tripId!!)
+                monitorStarted -> reconcileObdCollection()
                 !monitorStarted && tripId != null -> startMonitoring()
                 !monitorStarted -> stopSelf()
             }
