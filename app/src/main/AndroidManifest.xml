@@ -13,6 +13,11 @@
     <application android:theme="@android:style/Theme.Material.Light.NoActionBar" android:label="Vehicle Blackbox" android:allowBackup="false">
         <activity android:name=".ui.MainActivity" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
         <service android:name=".service.BlackBoxService" android:exported="false" android:foregroundServiceType="location" />
         <receiver android:name=".service.BootReceiver" android:exported="true">

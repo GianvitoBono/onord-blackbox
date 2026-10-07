@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.app.role.RoleManager
 import android.net.Uri
 import android.os.Bundle
 import android.os.Build
@@ -34,6 +35,10 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     private lateinit var info: TextView
     private val foregroundPermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { refresh() }
+    private val homeRoleRequest = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        startMonitorIfHome()
+        refresh()
+    }
     private var tripCount = 0
     private var sampleCount = 0
     private var pendingCount = 0
@@ -93,6 +98,10 @@ class MainActivity : ComponentActivity() {
         content.addView(Button(this).apply { text = "Salva configurazione e sincronizza"; setOnClickListener { saveSyncConfiguration() } })
         content.addView(Button(this).apply { text = "Sincronizza ora"; setOnClickListener { TelemetrySyncWorker.retryNow(this@MainActivity); refresh() } })
         content.addView(Button(this).apply { text = "Configura permessi posizione"; setOnClickListener { requestLocationPermissions() } })
+        content.addView(Button(this).apply { text = "Imposta come schermata Home (telefono dedicato)"; setOnClickListener { requestHomeRole() } })
+        content.addView(Button(this).apply { text = "Cambia schermata Home"; setOnClickListener {
+            startActivity(Intent(Settings.ACTION_HOME_SETTINGS))
+        } })
         content.addView(Button(this).apply { text = "Avvia logger"; setOnClickListener {
             if (!hasBackgroundLocation()) requestLocationPermissions()
             else ContextCompat.startForegroundService(this@MainActivity, Intent(this@MainActivity, BlackBoxService::class.java).setAction(BlackBoxService.ACTION_START_MONITOR))
@@ -118,7 +127,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onResume() { super.onResume(); refresh() }
+    override fun onResume() { super.onResume(); startMonitorIfHome(); refresh() }
+
+    private fun isHomeApp(): Boolean {
+        val roles = getSystemService(RoleManager::class.java)
+        return roles.isRoleAvailable(RoleManager.ROLE_HOME) && roles.isRoleHeld(RoleManager.ROLE_HOME)
+    }
+
+    private fun requestHomeRole() {
+        val roles = getSystemService(RoleManager::class.java)
+        if (roles.isRoleAvailable(RoleManager.ROLE_HOME) && !roles.isRoleHeld(RoleManager.ROLE_HOME)) {
+            homeRoleRequest.launch(roles.createRequestRoleIntent(RoleManager.ROLE_HOME))
+        } else refresh()
+    }
+
+    private fun startMonitorIfHome() {
+        if (!isHomeApp() || !MonitorStartup.isEnabled(this) || !hasBackgroundLocation()) return
+        ContextCompat.startForegroundService(this,
+            Intent(this, BlackBoxService::class.java).setAction(BlackBoxService.ACTION_START_MONITOR))
+    }
     override fun onStart() {
         super.onStart()
         getSharedPreferences("diagnostics", MODE_PRIVATE).registerOnSharedPreferenceChangeListener(diagnosticsListener)
@@ -167,6 +194,7 @@ class MainActivity : ComponentActivity() {
         val monitorStartedAt = diagnostics.getLong("monitor_started_at", 0L)
         val monitorStatus = diagnostics.getString("monitor_status", null)
         info.text = "Permesso posizione: ${if (hasBackgroundLocation()) "sempre" else "mancante"}\n" +
+            "Schermata Home: ${if (isHomeApp()) "Vehicle Blackbox" else "launcher Android"}\n" +
             "Avvio dopo riavvio: ${if (MonitorStartup.isEnabled(this)) "attivo" else "disattivo"}\n" +
             (if (bootStatus != null) "Ultimo boot: $bootStatus${if (bootReceivedAt > 0) " · ${DateFormat.format("dd/MM HH:mm:ss", bootReceivedAt)}" else ""}\n" else "") +
             (if (monitorStatus != null) "Monitor: $monitorStatus${if (monitorStartedAt > 0) " · ultimo avvio ${DateFormat.format("dd/MM HH:mm:ss", monitorStartedAt)}" else ""}\n" else "") +

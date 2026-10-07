@@ -18,6 +18,8 @@ Stato al 2026-10-06. Le caselle indicano lavoro completato nel repository, non u
 - [ ] Prova sul Nord reale con schermo spento, riavvio, stop/start motore, sosta carburante e ottimizzazioni OxygenOS.
 - [ ] Verificare sul Nord riavvio automatico 0.1.16, concessione «Posizione sempre», notifica foreground e registrazione GPS/OBD dopo reboot.
 - [x] 0.1.16: corretto flag iniziale di autostart (0.1.15 partiva disattivo dopo upgrade); ultimo broadcast boot e ultimo avvio logger visibili nella schermata. «Ferma monitor» conserva scelta disattiva.
+- [x] 0.1.17: modalità Home opzionale con richiesta ruolo di launcher predefinito; quando Activity torna visibile avvia il logger se abilitato e con «Posizione sempre». BootReceiver rimane attivo.
+- [ ] Verificare sul Nord avvio da telefono spento: sblocco, apertura Home, notifica logger, acquisizione GPS/OBD e ritorno al launcher Android dalle impostazioni.
 
 **Done:** APK installabile; trip GPS completo offline con riavvio e power cycle; nessuna perdita del trip già persistito; test del percorso fake e prova fisica documentata.
 
