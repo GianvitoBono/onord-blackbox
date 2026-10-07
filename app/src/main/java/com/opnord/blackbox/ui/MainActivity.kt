@@ -22,6 +22,7 @@ import androidx.activity.ComponentActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.opnord.blackbox.service.BlackBoxService
+import com.opnord.blackbox.service.MonitorStartup
 import com.opnord.blackbox.storage.BlackBoxDatabase
 import com.opnord.blackbox.sync.SyncConfigurationStore
 import com.opnord.blackbox.sync.EcuIdentitySyncWorker
@@ -161,7 +162,10 @@ class MainActivity : ComponentActivity() {
         val ecuSyncStatus = diagnostics.getString("ecu_sync_status", null)
         val captureStatus = diagnostics.getString("mode01_capture_status", null)
         val captureAt = diagnostics.getLong("mode01_capture_at", 0L)
+        val bootStatus = diagnostics.getString("boot_status", null)
         info.text = "Permesso posizione: ${if (hasBackgroundLocation()) "sempre" else "mancante"}\n" +
+            "Avvio dopo riavvio: ${if (MonitorStartup.isEnabled(this)) "attivo" else "disattivo"}\n" +
+            (if (bootStatus != null) "Ultimo avvio automatico: $bootStatus\n" else "") +
             "Viaggi salvati: $tripCount\nCampioni locali: $sampleCount\nIn attesa di sincronizzazione: $pendingCount\n\n" +
             "GPS: $gpsStatus${if (lastGps > 0) " · ultimo punto ${DateFormat.format("dd/MM HH:mm:ss", lastGps)}" else ""}\n" +
             "OBD: ${diagnostics.getString("obd_status", "non connesso") ?: "non connesso"}\n" +

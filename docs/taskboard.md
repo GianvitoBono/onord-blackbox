@@ -7,7 +7,7 @@ Stato al 2026-10-06. Le caselle indicano lavoro completato nel repository, non u
 - [x] Struttura Kotlin/Gradle, Room e servizio foreground persistente; alimentazione registrata come dato diagnostico.
 - [x] Rilevatore GPS di movimento/sosta, persistenza trip/campioni batteria ed eventi sosta Room v5.
 - [x] SDK e wrapper disponibili; `:app:testDebugUnitTest :app:assembleDebug` riusciti con cache sul disco esterno.
-- [x] Permessi runtime, avvio monitor da Activity visibile e recupero viaggio attivo recente dopo restart; impossibile garantire cold start dopo force-stop su Android stock.
+- [x] Permessi runtime, avvio monitor da Activity visibile, recupero viaggio attivo dopo restart e BootReceiver per riavvio/aggiornamento se monitor lasciato attivo; force-stop richiede nuova apertura manuale.
 - [x] Confermato via ADB modello AC2003, device Nord, Android 12/API 31; telefono nuovamente collegato via USB il 6 ottobre.
 - [ ] Verificare ordinamento eventi concorrenti, sopravvivenza servizio e restart dopo kill sul telefono.
 - [x] GPS Fused Location: richiesta 15 s in attesa movimento, 1 Hz in viaggio; precisione, quota, heading e velocità salvati.
@@ -16,6 +16,7 @@ Stato al 2026-10-06. Le caselle indicano lavoro completato nel repository, non u
 - [ ] UI diagnostica: presenti permessi, ultimo GPS, configurazione sync, contatori Room ed errori sync; manca stato viaggio/sosta live.
 - [ ] Log locali con retention e export; nessun dato posizione in log verbosi.
 - [ ] Prova sul Nord reale con schermo spento, riavvio, stop/start motore, sosta carburante e ottimizzazioni OxygenOS.
+- [ ] Verificare sul Nord riavvio automatico 0.1.15, concessione «Posizione sempre», notifica foreground e registrazione GPS/OBD dopo reboot; dopo aggiornamento da 0.1.14 premere «Avvia logger» una volta per salvare la scelta.
 
 **Done:** APK installabile; trip GPS completo offline con riavvio e power cycle; nessuna perdita del trip già persistito; test del percorso fake e prova fisica documentata.
 

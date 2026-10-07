@@ -108,13 +108,15 @@ class BlackBoxService : LifecycleService() {
                 ACTION_SCAN_DIAGNOSTICS -> lifecycleMutex.withLock { scanDiagnostics() }
                 ACTION_IDENTIFY_ECU -> lifecycleMutex.withLock { identifyEcu() }
                 ACTION_CAPTURE_MODE01 -> lifecycleMutex.withLock { captureMode01() }
-                null -> lifecycleMutex.withLock { startMonitoring() } // START_STICKY recovery.
+                null -> if (MonitorStartup.isEnabled(this@BlackBoxService))
+                    lifecycleMutex.withLock { startMonitoring() } else stopMonitoring() // START_STICKY recovery.
             }
         }
         return START_STICKY
     }
 
     private suspend fun startMonitoring() {
+        MonitorStartup.setEnabled(this, true)
         if (monitorStarted) {
             startLocations(idle = tripId == null)
             reconcileObdCollection()
@@ -134,6 +136,7 @@ class BlackBoxService : LifecycleService() {
 
     private suspend fun stopMonitoring() {
         lifecycleMutex.withLock {
+            MonitorStartup.setEnabled(this@BlackBoxService, false)
             monitorStarted = false
             locations.stop()
             stopActiveCollection()
