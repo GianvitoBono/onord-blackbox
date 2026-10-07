@@ -43,6 +43,11 @@ class Mode01Capture {
                     "ERROR: ${error.message ?: error.javaClass.simpleName}"
                 }
                 val decoded = EcuIdentityScanner.parseCanPayloads(raw, command)
+                if (code == 0x00) {
+                    // ATSP0 does not resolve its automatic protocol until a vehicle request succeeds.
+                    setup.put("ATDPN_after_0100", exchange(transport, "ATDPN"))
+                    setup.put("ATDP_after_0100", exchange(transport, "ATDP"))
+                }
                 val perEcu = JSONObject()
                 decoded.forEach { (ecu, bytes) ->
                     perEcu.put(ecu, JSONObject()

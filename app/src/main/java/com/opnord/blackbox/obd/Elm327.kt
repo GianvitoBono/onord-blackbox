@@ -102,6 +102,16 @@ object Elm327Parser {
         val text = raw.uppercase().replace(">", " ")
         adapterErrors.firstOrNull { text.contains(it) }?.let { return ObdResult.AdapterError(it) }
         if (text.contains("NO DATA")) return ObdResult.Unsupported(pid)
+        val headed = hasCanHeader(raw)
+        val byEcu = if (headed) EcuIdentityScanner.parseCanPayloads(raw, "01%02X".format(pid.code)) else emptyMap()
+        if (byEcu.isNotEmpty()) {
+            // 18DAF110 advertises the engine/emissions PID set on this vehicle.
+            // Keep a single source per reading when several ECUs answer a functional request.
+            val data = byEcu["18DAF110"] ?: byEcu.values.singleOrNull()
+                ?: return ObdResult.Malformed("Ambiguous multi-ECU response for ${pid.label}")
+            return decodeData(pid, data)
+        }
+        if (headed) return ObdResult.Malformed("Incomplete ISO-TP response for ${pid.label}")
         val bytes = responseBytes(text)
         // Match positive Mode 01 response and require the full PID width; never decode echoed commands.
         val responses = (0 until bytes.size - 1).filter { bytes[it] == 0x41 && bytes[it + 1] == pid.code }
@@ -113,6 +123,10 @@ object Elm327Parser {
         if (pid.code == 0x34 && response > 0 && bytes[response - 1] in 1..7 && bytes[response - 1] != 6) {
             return ObdResult.Malformed("Short ISO-TP payload for oxygen sensor 1 wideband PID")
         }
+        return decodeData(pid, data)
+    }
+
+    private fun decodeData(pid: ObdPid, data: List<Int>): ObdResult {
         if (data.size < pid.bytes) return ObdResult.Malformed("Incomplete ${pid.label} response")
         val a = data[0]; val b = data.getOrElse(1) { 0 }
         if (pid.code == 0x34) {
@@ -129,12 +143,20 @@ object Elm327Parser {
     fun rawUnsignedValue(raw: String, pidCode: Int): Long? {
         val text = raw.uppercase().replace(">", " ")
         if (adapterErrors.any(text::contains) || text.contains("NO DATA")) return null
-        val bytes = responseBytes(text)
-        val replies = (0 until bytes.size - 1).filter { bytes[it] == 0x41 && bytes[it + 1] == pidCode }
-        if (replies.size != 1) return null
-        val offset = replies.single()
-        val data = bytes.drop(offset + 2)
-        // Unknown PID widths vary. Reject empty, oversized, multi-response, and multi-ECU replies.
+        val data = if (hasCanHeader(raw)) {
+            // An ISO-TP First Frame alone is not a value. Only use a fully reassembled reply.
+            EcuIdentityScanner.parseCanPayloads(raw, "01%02X".format(pidCode)).values.singleOrNull()
+                ?: return null
+        } else {
+            val bytes = responseBytes(text)
+            val replies = (0 until bytes.size - 1).filter { bytes[it] == 0x41 && bytes[it + 1] == pidCode }
+            if (replies.size != 1) return null
+            val response = replies.single()
+            if (response >= 2 && bytes[response - 2] ushr 4 == 1 &&
+                (((bytes[response - 2] and 0x0F) shl 8) or bytes[response - 1]) > bytes.size - response) return null
+            bytes.drop(response + 2)
+        }
+        // Unknown PID widths vary. Reject empty, oversized, and multi-ECU replies.
         if (data.isEmpty() || data.size > 4) return null
         return data.fold(0L) { value, byte -> (value shl 8) or byte.toLong() }
     }
@@ -144,8 +166,19 @@ object Elm327Parser {
         val text = raw.uppercase()
         if (adapterErrors.any(text::contains)) return "adapter_error"
         if (text.contains("NO DATA")) return "unsupported"
+        if (hasCanHeader(raw)) {
+            return if (EcuIdentityScanner.parseCanPayloads(raw, "01%02X".format(pidCode)).isNotEmpty())
+                "complete" else "incomplete_or_malformed"
+        }
         val bytes = responseBytes(text)
         return if ((0 until bytes.size - 1).any { bytes[it] == 0x41 && bytes[it + 1] == pidCode }) "captured" else "malformed"
+    }
+
+    private fun hasCanHeader(raw: String): Boolean = raw.lineSequence().any { line ->
+        val parts = line.trim().split(Regex("\\s+"))
+        parts.firstOrNull()?.matches(Regex("(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{8})")) == true ||
+            (parts.size >= 5 && parts.take(3).map(String::uppercase) == listOf("18", "DA", "F1") &&
+                parts[3].matches(Regex("[0-9A-Fa-f]{2}")))
     }
 
     /** Decode the four-byte support bitmap returned by 0100, 0120, 0140, 0160, or 0180. */
@@ -154,10 +187,29 @@ object Elm327Parser {
     }
 
     fun supportedPidCodes(raw: String, rangeStart: Int): Set<Int> {
+        val headed = hasCanHeader(raw)
+        val byEcu = if (headed) EcuIdentityScanner.parseCanPayloads(raw, "01%02X".format(rangeStart)) else emptyMap()
+        if (byEcu.isNotEmpty()) return byEcu.values.flatMapTo(mutableSetOf()) { bitmapCodes(it, rangeStart) }
+        if (headed) return emptySet()
         val bytes = responseBytes(raw)
         val offset = (0 until bytes.size - 1).firstOrNull { bytes[it] == 0x41 && bytes[it + 1] == rangeStart } ?: return emptySet()
         if (bytes.size < offset + 6) return emptySet()
         val bitmap = bytes.subList(offset + 2, offset + 6)
+        return bitmapCodes(bitmap, rangeStart)
+    }
+
+    fun hasSupportedContinuation(raw: String, rangeStart: Int): Boolean {
+        val headed = hasCanHeader(raw)
+        val byEcu = if (headed) EcuIdentityScanner.parseCanPayloads(raw, "01%02X".format(rangeStart)) else emptyMap()
+        if (byEcu.isNotEmpty()) return byEcu.values.any { it.size == 4 && (it[3] and 1) != 0 }
+        if (headed) return false
+        val bytes = responseBytes(raw)
+        val offset = (0 until bytes.size - 1).firstOrNull { bytes[it] == 0x41 && bytes[it + 1] == rangeStart } ?: return false
+        return bytes.size >= offset + 6 && (bytes[offset + 5] and 1) != 0
+    }
+
+    private fun bitmapCodes(bitmap: List<Int>, rangeStart: Int): Set<Int> {
+        if (bitmap.size != 4) return emptySet()
         return (0..31).mapNotNull { bit ->
             val code = rangeStart + bit + 1
             // The final bitmap bit advertises the next bitmap range; it is not a sensor PID.

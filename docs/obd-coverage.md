@@ -28,7 +28,7 @@ I segnali produttore, soprattutto DPF, rigenerazioni, pressione turbo richiesta/
 
 Ricerca di richieste Mode 22 candidate, con fonti e limiti: [spike PID estesi Giulietta](giulietta-extended-pid-spike.md).
 
-Lettura della scansione Mode 09 e mappatura dei PID `01xx` già visibili: [spike Mode 01 del 6 ottobre 2026](giulietta-mode01-scan-2026-10-06.md).
+Lettura della scansione Mode 09 e mappatura dei PID `01xx` già visibili: [spike Mode 01 del 6 ottobre 2026](giulietta-mode01-scan-2026-10-06.md). Bitmap distinte delle due ECU e analisi dei frame tronchi: [acquisizione del 7 ottobre 2026](giulietta-mode01-capture-2026-10-07.md).
 
 La dashboard deve mostrare catalogo effettivamente raccolto, unità, sorgente e assenza dati. Un valore calcolato deve essere identificabile come tale.
 

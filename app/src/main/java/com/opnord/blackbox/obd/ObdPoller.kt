@@ -169,9 +169,7 @@ class ObdPoller(
                 onRawReply(rawReply(command, response, Elm327Parser.rawStatus(response, start)))
                 discovered += Elm327Parser.supportedPidCodes(response, start)
                 // A clear continuation bit means later 32-PID blocks are unavailable.
-                val bytes = Elm327Parser.responseBytes(response)
-                val ix = (0 until bytes.size - 1).firstOrNull { bytes[it] == 0x41 && bytes[it + 1] == start }
-                if (ix == null || bytes.size < ix + 6 || (bytes[ix + 5] and 1) == 0) break
+                if (!Elm327Parser.hasSupportedContinuation(response, start)) break
             } catch (e: CancellationException) { throw e }
             catch (_: Exception) { break }
             start += 0x20
