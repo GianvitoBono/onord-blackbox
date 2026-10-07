@@ -132,11 +132,16 @@ class BlackBoxService : LifecycleService() {
             stopped -> "Sosta in corso"
             else -> "Viaggio in corso"
         })
+        getSharedPreferences("diagnostics", MODE_PRIVATE).edit()
+            .putString("monitor_status", "logger avviato")
+            .putLong("monitor_started_at", System.currentTimeMillis()).apply()
     }
 
     private suspend fun stopMonitoring() {
         lifecycleMutex.withLock {
             MonitorStartup.setEnabled(this@BlackBoxService, false)
+            getSharedPreferences("diagnostics", MODE_PRIVATE).edit()
+                .putString("monitor_status", "logger fermato dall'utente").apply()
             monitorStarted = false
             locations.stop()
             stopActiveCollection()

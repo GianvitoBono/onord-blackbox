@@ -16,7 +16,8 @@ Stato al 2026-10-06. Le caselle indicano lavoro completato nel repository, non u
 - [ ] UI diagnostica: presenti permessi, ultimo GPS, configurazione sync, contatori Room ed errori sync; manca stato viaggio/sosta live.
 - [ ] Log locali con retention e export; nessun dato posizione in log verbosi.
 - [ ] Prova sul Nord reale con schermo spento, riavvio, stop/start motore, sosta carburante e ottimizzazioni OxygenOS.
-- [ ] Verificare sul Nord riavvio automatico 0.1.15, concessione «Posizione sempre», notifica foreground e registrazione GPS/OBD dopo reboot; dopo aggiornamento da 0.1.14 premere «Avvia logger» una volta per salvare la scelta.
+- [ ] Verificare sul Nord riavvio automatico 0.1.16, concessione «Posizione sempre», notifica foreground e registrazione GPS/OBD dopo reboot.
+- [x] 0.1.16: corretto flag iniziale di autostart (0.1.15 partiva disattivo dopo upgrade); ultimo broadcast boot e ultimo avvio logger visibili nella schermata. «Ferma monitor» conserva scelta disattiva.
 
 **Done:** APK installabile; trip GPS completo offline con riavvio e power cycle; nessuna perdita del trip già persistito; test del percorso fake e prova fisica documentata.
 

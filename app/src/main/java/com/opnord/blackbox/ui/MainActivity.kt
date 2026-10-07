@@ -163,9 +163,13 @@ class MainActivity : ComponentActivity() {
         val captureStatus = diagnostics.getString("mode01_capture_status", null)
         val captureAt = diagnostics.getLong("mode01_capture_at", 0L)
         val bootStatus = diagnostics.getString("boot_status", null)
+        val bootReceivedAt = diagnostics.getLong("boot_received_at", 0L)
+        val monitorStartedAt = diagnostics.getLong("monitor_started_at", 0L)
+        val monitorStatus = diagnostics.getString("monitor_status", null)
         info.text = "Permesso posizione: ${if (hasBackgroundLocation()) "sempre" else "mancante"}\n" +
             "Avvio dopo riavvio: ${if (MonitorStartup.isEnabled(this)) "attivo" else "disattivo"}\n" +
-            (if (bootStatus != null) "Ultimo avvio automatico: $bootStatus\n" else "") +
+            (if (bootStatus != null) "Ultimo boot: $bootStatus${if (bootReceivedAt > 0) " · ${DateFormat.format("dd/MM HH:mm:ss", bootReceivedAt)}" else ""}\n" else "") +
+            (if (monitorStatus != null) "Monitor: $monitorStatus${if (monitorStartedAt > 0) " · ultimo avvio ${DateFormat.format("dd/MM HH:mm:ss", monitorStartedAt)}" else ""}\n" else "") +
             "Viaggi salvati: $tripCount\nCampioni locali: $sampleCount\nIn attesa di sincronizzazione: $pendingCount\n\n" +
             "GPS: $gpsStatus${if (lastGps > 0) " · ultimo punto ${DateFormat.format("dd/MM HH:mm:ss", lastGps)}" else ""}\n" +
             "OBD: ${diagnostics.getString("obd_status", "non connesso") ?: "non connesso"}\n" +

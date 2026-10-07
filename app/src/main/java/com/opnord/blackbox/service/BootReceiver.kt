@@ -12,8 +12,14 @@ import androidx.core.content.ContextCompat
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED && intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
-        if (!MonitorStartup.isEnabled(context)) return
         val prefs = context.getSharedPreferences("diagnostics", Context.MODE_PRIVATE)
+        val event = if (intent.action == Intent.ACTION_BOOT_COMPLETED) "riavvio" else "aggiornamento"
+        prefs.edit().putLong("boot_received_at", System.currentTimeMillis())
+            .putString("boot_status", "broadcast $event ricevuto").apply()
+        if (!MonitorStartup.isEnabled(context)) {
+            prefs.edit().putString("boot_status", "broadcast $event ricevuto: monitor disattivato").apply()
+            return
+        }
         val hasLocation = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
         val hasBackground = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -24,7 +30,7 @@ class BootReceiver : BroadcastReceiver() {
         try {
             ContextCompat.startForegroundService(context,
                 Intent(context, BlackBoxService::class.java).setAction(BlackBoxService.ACTION_START_MONITOR))
-            prefs.edit().putString("boot_status", "avvio logger richiesto dopo riavvio/aggiornamento").apply()
+            prefs.edit().putString("boot_status", "avvio logger richiesto dopo $event").apply()
         } catch (error: Exception) {
             val detail = "avvio automatico fallito: ${error.javaClass.simpleName}: ${error.message ?: "errore"}"
             Log.w("VehicleBlackbox", detail, error)
