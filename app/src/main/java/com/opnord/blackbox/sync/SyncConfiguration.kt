@@ -16,6 +16,18 @@ object SyncConfigurationStore {
     private const val TOKEN = "encrypted_token"
     private const val KEY_ALIAS = "opnord.device-token"
 
+    fun saveObdPin(context: Context, address: String, pin: String) {
+        require(pin.length in 1..16 && pin.all { it in '0'..'9' })
+        context.getSharedPreferences("obd_pin", Context.MODE_PRIVATE).edit()
+            .putString("address", address.uppercase()).putString("encrypted_pin", encrypt(pin)).apply()
+    }
+
+    fun readObdPin(context: Context, address: String): String? {
+        val prefs = context.getSharedPreferences("obd_pin", Context.MODE_PRIVATE)
+        if (!address.equals(prefs.getString("address", null), ignoreCase = true)) return null
+        return prefs.getString("encrypted_pin", null)?.let { runCatching { decrypt(it) }.getOrNull() }
+    }
+
     fun read(context: Context): SyncConfiguration? {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val baseUrl = prefs.getString("base_url", null)?.trim()?.trimEnd('/') ?: return null

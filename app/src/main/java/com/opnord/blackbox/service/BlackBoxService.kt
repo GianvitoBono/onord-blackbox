@@ -2,6 +2,7 @@ package com.opnord.blackbox.service
 
 import android.app.*
 import android.content.Intent
+import android.content.IntentFilter
 import android.location.Location
 import android.os.BatteryManager
 import android.os.IBinder
@@ -41,9 +42,15 @@ class BlackBoxService : LifecycleService() {
     private lateinit var locations: LocationCollector
     private var wakeLock: PowerManager.WakeLock? = null
     @Volatile private var monitorStarted = false
+    private val pairingReceiver = ObdPairingReceiver()
 
     override fun onCreate() {
         super.onCreate()
+        ContextCompat.registerReceiver(this, pairingReceiver,
+            IntentFilter(android.bluetooth.BluetoothDevice.ACTION_PAIRING_REQUEST).apply {
+                addAction(android.bluetooth.BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+                priority = 1000
+            }, ContextCompat.RECEIVER_EXPORTED)
         db = BlackBoxDatabase.get(this)
         locations = locationCollectorFactory(this)
         val channel = NotificationChannel(CHANNEL, "Blackbox logger", NotificationManager.IMPORTANCE_LOW)
@@ -511,6 +518,7 @@ class BlackBoxService : LifecycleService() {
     }
 
     override fun onDestroy() {
+        unregisterReceiver(pairingReceiver)
         monitorStarted = false
         locations.stop()
         locationQueue.close()

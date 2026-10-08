@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var deviceId: EditText
     private lateinit var bearerToken: EditText
     private lateinit var obdAddress: EditText
+    private lateinit var obdPin: EditText
     private val diagnosticsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ -> runOnUiThread { refresh() } }
     private val bluetoothPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) showPairedObdDevices() else refresh()
@@ -89,6 +90,28 @@ class MainActivity : ComponentActivity() {
         content.addView(obdAddress)
         content.addView(Button(this).apply { text = "Scegli dispositivo Bluetooth associato"; setOnClickListener { selectObdDevice() } })
         content.addView(Button(this).apply { text = "Salva adattatore OBD"; setOnClickListener { saveObdConfiguration() } })
+        obdPin = EditText(this).apply {
+            hint = "PIN OBD per pairing automatico (es. 1234)"
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
+        }
+        content.addView(obdPin)
+        content.addView(Button(this).apply { text = "Salva PIN per adattatore OBD"; setOnClickListener {
+            val address = getSharedPreferences("obd_configuration", MODE_PRIVATE).getString("address", "").orEmpty()
+            val pin = obdPin.text.toString()
+            if (!android.bluetooth.BluetoothAdapter.checkBluetoothAddress(address)) {
+                info.text = "Salva prima un adattatore OBD valido."
+            } else if (pin.length !in 1..16 || !pin.all { it in '0'..'9' }) {
+                info.text = "Inserisci PIN numerico da 1 a 16 cifre."
+            } else {
+                SyncConfigurationStore.saveObdPin(this@MainActivity, address, pin)
+                obdPin.text.clear()
+                refresh()
+            }
+        } })
+        content.addView(Button(this).apply { text = "Disattiva PIN automatico"; setOnClickListener {
+            getSharedPreferences("obd_pin", MODE_PRIVATE).edit().clear().apply()
+            refresh()
+        } })
         content.addView(Button(this).apply { text = "Scansiona errori OBD motore"; setOnClickListener { scanDiagnostics() } })
         content.addView(Button(this).apply { text = "Copia risultato scansione"; setOnClickListener { copyDiagnosticReport() } })
         content.addView(Button(this).apply { text = "Identifica centralina motore"; setOnClickListener { identifyEcu() } })
@@ -201,6 +224,8 @@ class MainActivity : ComponentActivity() {
             "Viaggi salvati: $tripCount\nCampioni locali: $sampleCount\nIn attesa di sincronizzazione: $pendingCount\n\n" +
             "GPS: $gpsStatus${if (lastGps > 0) " · ultimo punto ${DateFormat.format("dd/MM HH:mm:ss", lastGps)}" else ""}\n" +
             "OBD: ${diagnostics.getString("obd_status", "non connesso") ?: "non connesso"}\n" +
+            "PIN automatico OBD: ${if (SyncConfigurationStore.readObdPin(this, getSharedPreferences("obd_configuration", MODE_PRIVATE).getString("address", "").orEmpty()) != null) "attivo per adattatore salvato" else "disattivo"}\n" +
+            (diagnostics.getString("obd_pairing_status", null)?.let { "Pairing OBD: $it\n" } ?: "") +
             (if (obdLastError != null) "Ultimo errore OBD: $obdLastError\n" else "") +
             (if (obdSupported >= 0) "PID OBD dichiarati: $obdSupported · decodificati: ${diagnostics.getInt("obd_known", 0)} · raw: ${diagnostics.getInt("obd_raw", 0)}\n" else "") +
             (if (lastObd > 0) "Ultimi valori OBD: ${diagnostics.getInt("obd_last_values", 0)} · ${DateFormat.format("dd/MM HH:mm:ss", lastObd)}\n" else "") +

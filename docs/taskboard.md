@@ -44,6 +44,8 @@ Stato al 2026-10-06. Le caselle indicano lavoro completato nel repository, non u
 
 ## P2 — OBD
 
+- [x] App 0.1.18: PIN OBD opzionale cifrato con Keystore, associato al MAC configurato; receiver risponde a PAIRING_VARIANT_PIN con setPin e mostra esito senza registrare il PIN. Da verificare su OxygenOS: finestra sistema potrebbe comunque comparire; nessun reset automatico del bond.
+
 - [x] Backend: HTTP 400 `invalid_raw_obd_reply` correggibile con migrazione 0013 e supporto `incomplete_or_malformed`; compatibilità con batch Android già accodati, senza modificare o cancellare dati locali.
 
 - [x] Scelta iniziale BT classico SPP, permesso Bluetooth e selettore dispositivi già associati.
